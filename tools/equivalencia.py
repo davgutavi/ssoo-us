@@ -87,9 +87,6 @@ SIN_REGISTRO = {"registro": False}
 NODOS_LENTOS = r'''mkdir -p "$BATS_TEST_TMPDIR/lento"
 printf '#!/bin/bash\n[[ -f "$MOCK_STATE/virt_install_n" ]] && sleep 15\nexec "%s" "$@"\n' "$MOCKS_DIR/virt-install" > "$BATS_TEST_TMPDIR/lento/virt-install"
 chmod +x "$BATS_TEST_TMPDIR/lento/virt-install"; export PATH="$BATS_TEST_TMPDIR/lento:$PATH"'''
-BASE_EN_EL_RESUMEN = ("ci-provision 3.0.1, con --gluster-cluster --base, escribe «(nodosBASE)» y "
-                      "«--eliminar server1 … server4BASE» (${BASE_OPT:- …} vale BASE_OPT); ssoo-us "
-                      "escribe «(nodos)» y «--eliminar server1 … server4»")
 VIRT_INSTALL_LENTO = r'''mkdir -p "$BATS_TEST_TMPDIR/lento"
 printf '#!/bin/bash\nsleep 6\nexec "%s" "$@"\n' "$MOCKS_DIR/virt-install" > "$BATS_TEST_TMPDIR/lento/virt-install"
 chmod +x "$BATS_TEST_TMPDIR/lento/virt-install"; export PATH="$BATS_TEST_TMPDIR/lento:$PATH"'''
@@ -376,14 +373,14 @@ CASOS = [
     (4, ["--gluster-cluster", "--imagen", "ubuntu-base", "--tam", "80G"], {}, ""),
     (4, ["--prefijo", "demo", "--gluster-cluster", "--base", "gluster2.qcow2"], {},
      'programa --glusterfs gluster-base >/dev/null 2>&1; programa --glusterfs --base gluster-base.qcow2 '
-     'gluster2 >/dev/null 2>&1', {"conocida": BASE_EN_EL_RESUMEN}),
+     'gluster2 >/dev/null 2>&1'),
     (4, ["--gluster-cluster"], {}, ""),
     (4, ["--gluster-cluster", "--discos-nodo", "7"], {}, ""),
     (4, ["--gluster-cluster", "--imagen", "debian12"], {}, ""),
     (4, ["--si", "--limpiar", "--gluster-cluster"], {}, 'touch "$SILO/server3-vdd.qcow2"'),
     (4, ["--si", "--limpiar", "--gluster-cluster", "--base", "mibase.qcow2"], {},
      'qemu-img create -f qcow2 -b debian12.qcow2 -F qcow2 "$SILO/mibase.qcow2" 40G >/dev/null; '
-     'touch "$SILO/server2.qcow2"', {"conocida": BASE_EN_EL_RESUMEN}),
+     'touch "$SILO/server2.qcow2"'),
     (4, ["--gluster-cluster"], {"MOCK_SHUTDOWN_NUNCA": "1"}, "", SIN_REGISTRO),
     (4, ["--gluster-cluster"], {"MOCK_CI_RESULT": "error"}, ""),
     (4, ["--no-wait", "--gluster-cluster"], {}, ""),
@@ -395,6 +392,71 @@ CASOS = [
      'programa --prefijo demo --glusterfs gluster-base >/dev/null 2>&1'),
     # Ctrl+C mientras se crean los nodos: se deshacen, la base terminada se conserva
     (4, ["--gluster-cluster"], {}, NODOS_LENTOS, {"registro": False, "senal": ("SIGINT", 9)}),
+
+    # Fase 5: --listar, --eliminar y --eliminar-todo
+    (5, ["--listar"], {}, ""),
+    (5, ["--listar"], {}, SIN_NOBLE),
+    (5, ["--listar"], {}, 'programa --no-wait --extra-disks server1 >/dev/null 2>&1; '
+                          'programa --imagen debian12 --glusterfs gluster-base >/dev/null 2>&1'),
+    (5, ["--listar"], {}, CREAR_SERVER1 + '; programa server2 >/dev/null 2>&1; '
+                          'virsh shutdown "${USUARIO}-server2" >/dev/null; ' + CADENA_DEBIAN + '; '
+                          + CADENA_ROTA + '; touch "$SILO/suelto.qcow2"'),
+    (5, ["--listar"], {"MOCK_AGENT_DELAY": "999"}, 'programa --no-wait server1 >/dev/null 2>&1'),
+    (5, ["--prefijo", "demo", "--listar"], {},
+     'programa --prefijo demo server1 >/dev/null 2>&1; definir_dominio demo-ajena running '
+     '/otra/parte/ajena.qcow2; definir_dominio demo-vacia shut\\ off'),
+    (5, ["--listar"], {}, 'definir_dominio "${USUARIO}-a-mano" paused "$SILO/a-mano.qcow2"; '
+                          'touch "$SILO/a-mano.qcow2"'),
+    (5, ["--si", "--eliminar", "server1"], {},
+     'programa --extra-disks server1 >/dev/null 2>&1; programa server2 >/dev/null 2>&1'),
+    (5, ["--si", "--dry-run", "--eliminar", "server1", "server2"], {},
+     'programa --extra-disks server1 >/dev/null 2>&1; programa server2 >/dev/null 2>&1'),
+    (5, ["--si", "--eliminar", "server1", "server1"], {}, CREAR_SERVER1),
+    (5, ["--si", "--eliminar", "server9"], {}, ""),
+    (5, ["--si", "--eliminar", "debian12"], {}, ""),
+    (5, ["--si", "--eliminar", "server9", "debian12"], {}, CREAR_SERVER1),
+    (5, ["--si", "--eliminar", "server1"], {}, 'programa --disco server1.qcow2 otra >/dev/null 2>&1'),
+    (5, ["--si", "--eliminar", "gluster-base"], {},
+     'programa --glusterfs gluster-base >/dev/null 2>&1; '
+     'programa --base gluster-base.qcow2 nodo1 >/dev/null 2>&1'),
+    (5, ["--si", "--eliminar", "nodo1", "gluster-base"], {},
+     'programa --glusterfs gluster-base >/dev/null 2>&1; '
+     'programa --base gluster-base.qcow2 nodo1 >/dev/null 2>&1'),
+    (5, ["--si", "--eliminar", "server1", "gluster-base"], {},
+     'programa --glusterfs gluster-base >/dev/null 2>&1; programa --base gluster-base.qcow2 server1 '
+     '>/dev/null 2>&1; definir_dominio "${USUARIO}-copia" running "$SILO/server1.qcow2"'),
+    (5, ["--si", "--eliminar", "ajena"], {},
+     'definir_dominio "${USUARIO}-ajena" running /otra/parte/ajena.qcow2'),
+    (5, ["--si", "--eliminar", "server1"], {}, 'touch "$SILO/server1-vdc.qcow2" "$SILO/server1-vdzz.qcow2"; '
+                                               'mkdir "$SILO/cloudinit-${USUARIO}-server1.dry-run"'),
+    (5, ["--si", "--eliminar", "server1"], {"MOCK_UNDEFINE_FALLA": "1"}, CREAR_SERVER1),
+    (5, ["--eliminar", "server1"], {}, CREAR_SERVER1),
+    (5, ["--si", "--prefijo", "demo", "--eliminar", "server1"], {},
+     CREAR_SERVER1 + '; programa --prefijo demo server1 >/dev/null 2>&1'),
+    (5, ["--si", "--eliminar-todo"], {},
+     CREAR_SERVER1 + '; programa --glusterfs gluster-base >/dev/null 2>&1; '
+     'programa --prefijo demo server1 >/dev/null 2>&1'),
+    (5, ["--si", "--dry-run", "--eliminar-todo"], {},
+     CREAR_SERVER1 + '; programa --glusterfs gluster-base >/dev/null 2>&1; '
+     'programa --prefijo demo server1 >/dev/null 2>&1'),
+    (5, ["--si", "--prefijo", "demo", "--eliminar-todo"], {},
+     CREAR_SERVER1 + '; programa --prefijo demo server1 >/dev/null 2>&1; touch "$SILO/demo-suelto.qcow2" '
+     '"$SILO/otro.qcow2"'),
+    (5, ["--si", "--eliminar-todo"], {}, ""),
+    (5, ["--si", "--eliminar-todo"], {}, 'mkdir -p "$SILO/cloudinit-${USUARIO}-fantasma" '
+                                         '"$SILO/cloudinit-${USUARIO}-otro.dry-run"'),
+    (5, ["--si", "--eliminar-todo"], {}, 'touch "$SILO/suelto.qcow2"; ' + CADENA_DEBIAN),
+    (5, ["--si", "--eliminar-todo"], {},
+     'programa --glusterfs gluster-base >/dev/null 2>&1; (cd "$SILO" && qemu-img create -f qcow2 -b '
+     'gluster-base.qcow2 -F qcow2 intermedia.qcow2 >/dev/null && qemu-img create -f qcow2 -b '
+     'intermedia.qcow2 -F qcow2 copia.qcow2 >/dev/null); '
+     'definir_dominio SERVIDOR-A-MANO running "$SILO/copia.qcow2"'),
+    (5, ["--si", "--eliminar-todo"], {},
+     'programa --disco server1.qcow2 otra >/dev/null 2>&1; touch "$SILO/suelto.qcow2"; '
+     'definir_dominio "${USUARIO}-ajena" running /otra/parte/ajena.qcow2'),
+    (5, ["--eliminar-todo"], {}, CREAR_SERVER1 + '; touch "$SILO/mi-copia-seguridad.qcow2"'),
+    (5, ["--eliminar-todo"], {}, 'touch "$SILO/mi-copia-seguridad.qcow2"'),
+    (5, ["--si", "--eliminar-todo"], {"MOCK_UNDEFINE_FALLA": "1"}, CREAR_SERVER1),
 ]
 
 

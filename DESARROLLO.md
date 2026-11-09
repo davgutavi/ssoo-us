@@ -7,10 +7,10 @@ asignatura, no necesitas nada de esto: lee el [README](README.md).
 `ci-diagnosis` (subcomando `diagnosis`), con la misma interfaz, los mismos
 mensajes y los mismos códigos de salida que cada uno. Mientras se porta, lo que
 falta responde «todavía no está implementado» con el código 69, que no usa
-ninguna de las dos herramientas: `diagnosis` entero y, en `provision`,
-`--listar`, `--eliminar`, `--eliminar-todo` y `--menu` (fases 5 y 6 del port).
-Ya están las validaciones, `--dry-run`, la creación de una máquina suelta y
-GlusterFS (fases 1 a 4).
+ninguna de las dos herramientas: `diagnosis` entero y, en `provision`, el
+asistente `--menu` (fase 6 del port). Ya están las validaciones, `--dry-run`,
+la creación de una máquina suelta, GlusterFS, `--listar`, `--eliminar` y
+`--eliminar-todo` (fases 1 a 5).
 
 ## Estructura
 
@@ -34,6 +34,7 @@ src/maquina.py    provision: orden de virt-install, plan, creación y resumen de
                   una máquina suelta
 src/cluster.py    provision: base GlusterFS (--glusterfs y fase 1 del clúster)
                   y --gluster-cluster
+src/gestion.py    provision: --listar, --eliminar y --eliminar-todo
 src/provision.py  provision: configuración, opciones, validaciones (también las
                   del entorno: libvirt, silo, red, IPs), flujo y marcha atrás
 src/main.py       Despachador de subcomandos, --version y -h
@@ -146,7 +147,7 @@ Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy pasan los de las fases 1 a 4 y fallan los demás (por «todavía no está
+Hoy pasan los de las fases 1 a 5 y fallan los demás (por «todavía no está
 implementado»). Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
@@ -182,13 +183,13 @@ Necesita un bash 4 o posterior en el `PATH` (en macOS, el de Homebrew). Cada cas
 lleva la fase a partir de la cual tiene que coincidir; al portar una fase se
 añaden sus casos.
 
-### Diferencias deliberadas con `ci-provision` 3.0.1
+### Diferencias deliberadas con `ci-provision`
 
-- **Resumen de `--gluster-cluster --base IMAGEN`:** `ci-provision.sh` escribe
-  «(nodosIMAGEN)» y «--eliminar server1 server2 server3 server4IMAGEN» (en
-  bash, `${BASE_OPT:- …}` vale `BASE_OPT` cuando está definida), una orden que
-  no funcionaría. `ssoo-us` escribe «(nodos)» y «--eliminar server1 server2
-  server3 server4». Lo fija un test unitario (`TestResumenDelCluster`).
+Ninguna en la salida de los casos de la herramienta. La referencia es
+`ci-provision` 3.0.2, que corrigió el resumen de `--gluster-cluster --base
+IMAGEN` (la 3.0.1 escribía «(nodosIMAGEN)» y «--eliminar … server4IMAGEN»).
+Si vuelve a hacer falta una, el caso lleva la opción `conocida` con el motivo:
+se muestra con «≈» y no cuenta como fallo.
 
 ## Lo que conviene saber antes de tocar el código
 

@@ -80,8 +80,8 @@ if __name__ == "__main__":
 
 
 class TestResumenDelCluster(unittest.TestCase):
-    """ci-provision 3.0.1 escribe «(nodosBASE)» y «--eliminar ... server4BASE»
-    con --base (${BASE_OPT:- …} vale BASE_OPT). ssoo-us lo corrige."""
+    """ci-provision 3.0.1 escribía «(nodosBASE)» y «--eliminar ... server4BASE»
+    con --base (${BASE_OPT:- …} vale BASE_OPT); lo corrigió la 3.0.2."""
 
     def resumen(self, *argv):
         s = Silo("--gluster-cluster", *argv)

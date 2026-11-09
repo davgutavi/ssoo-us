@@ -1,5 +1,5 @@
 # ARCHIVO GENERADO por tools/importar_aceptacion.py a partir de
-# ci-provision/test/helpers.bash (453d651). No lo edite a mano: vuelva a importarlo.
+# ci-provision/test/helpers.bash (7bf6aff). No lo edite a mano: vuelva a importarlo.
 # Las diferencias con el original están en la lista SUSTITUCIONES del
 # importador.
 # Preparación común de los tests locales: un HOME de mentira con su silo,

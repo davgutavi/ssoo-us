@@ -1,6 +1,6 @@
 # --- provision: configuración, opciones y validaciones -------------------------
 #
-# Port de src/main.sh de ci-provision 3.0.1. Los mensajes y los códigos de
+# Port de src/main.sh de ci-provision 3.0.2. Los mensajes y los códigos de
 # salida son los mismos: los tests de aceptación (tests/aceptacion) son los de
 # ci-provision.
 
@@ -954,9 +954,15 @@ def ejecutar_provision(o, argv):
     validar_opciones(o)
     calcular_derivados(o)
     validar_entorno(o)
-    if o.modo_gestion:
-        raise NoImplementado("--menu, --listar y --eliminar")   # fases 5 y 6
-    if o.cluster:
+    if o.menu:
+        raise NoImplementado("--menu")   # fase 6
+    elif o.listar:
+        listar_maquinas(o)
+    elif o.eliminar:
+        eliminar_maquinas(o, o.nombres)
+    elif o.eliminar_todo:
+        eliminar_todo(o)
+    elif o.cluster:
         ejecutar_cluster(o)
     else:
         ejecutar_maquina(o)
