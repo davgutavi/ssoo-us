@@ -259,6 +259,66 @@ Hoy son iguales las 45. Los fuentes de `diagnosis` son de `ssoo-us`: se editan
 a mano. Si se corrige algo en `ci-diagnosis` mientras los alumnos lo usan, se
 trae a mano y esta herramienta dice si las dos siguen diciendo lo mismo.
 
+## Pruebas en un servidor de la asignatura
+
+Dos baterías, que ejecutan `ssoo-us` de verdad contra libvirt. Son las de
+`ci-provision` 3.0.3 y `ci-diagnosis` 1.0.2, con `ssoo-us`. Esperan el programa
+en el directorio de arriba (`../ssoo-us`; `SSOO_US=RUTA` lo cambia), así que en
+el servidor se copian juntos, en un directorio que pueda leer la cuenta de
+prueba:
+
+```
+DIR/ssoo-us
+DIR/tools/pruebas-servidor-provision.sh
+DIR/tools/pruebas-servidor-diagnosis.sh
+DIR/tools/preparar-cuenta-prueba.sh
+```
+
+**`provision`**, con la cuenta de un profesor (crea máquinas en su silo):
+
+```bash
+bash DIR/tools/pruebas-servidor-provision.sh a    # validaciones: no crea nada
+bash DIR/tools/pruebas-servidor-provision.sh b    # máquinas sueltas, comprobadas por SSH
+PREFIJO=pruebas bash DIR/tools/pruebas-servidor-provision.sh c   # el clúster GlusterFS
+```
+
+- **A**: códigos de error y `--dry-run`.
+- **B**: SERVER1 de Ubuntu con DHCP y con IP fija y seis discos, con las
+  instantáneas del boletín; Debian 12 con `--ssh-pass` y `--no-root`;
+  `--glusterfs` desde Noble y desde ubuntu-base; `--listar` y `--eliminar`.
+  Crea `pruebas1`, `pruebasgluster` y `pruebasnoble`.
+- **C**: el clúster, comprobado nodo a nodo, con MySQL en Podman sobre el
+  volumen disperso (`SIN_MYSQL=1` lo omite), y los nodos rehechos con
+  `--base`. Con `PREFIJO=xxx` el clúster es `xxx-server1`..`4`, para no tocar
+  los `server1`..`4` de la cuenta.
+
+Para entrar en las máquinas usa una clave de usar y tirar (en
+`~/.ssoo-us-pruebas.XXXXXX`, sin frase), que borra al terminar; al terminar
+elimina todo lo que ha creado (`CONSERVAR=1` lo deja). El registro queda en el
+silo (`pruebas-servidor-FECHA.log`).
+
+**`diagnosis`**, con una **cuenta de alumno de prueba** (sin `sudo`, con los
+grupos de un alumno: `kvm`, `libvirt`), desde la de un profesor:
+
+```bash
+sudo -iu CUENTA bash DIR/tools/preparar-cuenta-prueba.sh     # una vez: silo, red e imagen
+sudo -iu CUENTA bash DIR/tools/pruebas-servidor-diagnosis.sh a
+```
+
+- **a**: `--antes`, provocando cada fallo en el silo de la cuenta. No crea
+  máquinas.
+- **b**: `--acceso`, con la máquina `CUENTA-server1` encendida y apagada (de 10
+  a 15 minutos).
+- **c**: B8, C2, B10 y C1 con máquinas de verdad (unos 5 minutos).
+- **d**: A1 y A2, dentro de una máquina Ubuntu 22.04 con su propio libvirt, para
+  no afectar a nadie (de 5 a 10 minutos; la primera vez descarga la imagen).
+- **e**: B9, B3 con máquina, D5 y D6 (unos 10 minutos).
+
+Al terminar deja el silo de la cuenta como estaba y elimina sus máquinas. El
+registro queda en `/tmp/pruebas-ssoo-us-diagnosis-CUENTA-FECHA.log`.
+`preparar-cuenta-prueba.sh --quitar` quita el silo y la red de la cuenta (sin
+borrar archivos).
+
 ## Para el profesor: `tools/ssoo-us-admin`
 
 Lanza `ssoo-us diagnosis` sobre la cuenta de un alumno, como él (con `sudo`),
