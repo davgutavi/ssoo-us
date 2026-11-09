@@ -77,3 +77,27 @@ class TestDeshacer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestResumenDelCluster(unittest.TestCase):
+    """ci-provision 3.0.1 escribe «(nodosBASE)» y «--eliminar ... server4BASE»
+    con --base (${BASE_OPT:- …} vale BASE_OPT). ssoo-us lo corrige."""
+
+    def resumen(self, *argv):
+        s = Silo("--gluster-cluster", *argv)
+        su.calcular_ips_cluster(s.o)
+        s.o.imagen = "noble"
+        with contextlib.redirect_stdout(io.StringIO()) as salida:
+            su.print_summary_cluster(s.o)
+        return salida.getvalue()
+
+    def test_sin_base(self):
+        texto = self.resumen()
+        self.assertIn("(nodos e imagen base):", texto)
+        self.assertIn("--eliminar server1 server2 server3 server4 gluster-base\n", texto)
+
+    def test_con_base(self):
+        texto = self.resumen("--prefijo", "demo", "--base", "mibase.qcow2")
+        self.assertIn("(nodos):", texto)
+        self.assertIn("provision --prefijo demo --eliminar server1 server2 server3 server4\n", texto)
+        self.assertRegex(texto, r"IMPORTANTE: no borres /\S*/imagenesMV/mibase\.qcow2\.\n")

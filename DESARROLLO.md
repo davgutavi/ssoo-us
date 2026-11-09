@@ -8,9 +8,9 @@ asignatura, no necesitas nada de esto: lee el [README](README.md).
 mensajes y los mismos códigos de salida que cada uno. Mientras se porta, lo que
 falta responde «todavía no está implementado» con el código 69, que no usa
 ninguna de las dos herramientas: `diagnosis` entero y, en `provision`,
-`--glusterfs`, `--gluster-cluster`, `--listar`, `--eliminar`, `--eliminar-todo`
-y `--menu` (fases 4 a 6 del port). Ya están las validaciones, `--dry-run` y la
-creación de una máquina suelta (fases 1 a 3).
+`--listar`, `--eliminar`, `--eliminar-todo` y `--menu` (fases 5 y 6 del port).
+Ya están las validaciones, `--dry-run`, la creación de una máquina suelta y
+GlusterFS (fases 1 a 4).
 
 ## Estructura
 
@@ -32,7 +32,8 @@ src/espera.py     provision: espera a cloud-init por el agente, apagado y
                   reinicio en frío
 src/maquina.py    provision: orden de virt-install, plan, creación y resumen de
                   una máquina suelta
-src/cluster.py    provision: --gluster-cluster
+src/cluster.py    provision: base GlusterFS (--glusterfs y fase 1 del clúster)
+                  y --gluster-cluster
 src/provision.py  provision: configuración, opciones, validaciones (también las
                   del entorno: libvirt, silo, red, IPs), flujo y marcha atrás
 src/main.py       Despachador de subcomandos, --version y -h
@@ -145,7 +146,7 @@ Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy pasan los de las fases 1 a 3 y fallan los demás (por «todavía no está
+Hoy pasan los de las fases 1 a 4 y fallan los demás (por «todavía no está
 implementado»). Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
@@ -168,7 +169,9 @@ a los mocks. Algunos casos mandan una señal a mitad (Ctrl+C, SIGTERM). Se
 normalizan la orden (`$0`), la línea de la versión, la fecha del `instance-id`,
 los segundos de «tras Ns» y el PID del fichero temporal de la descarga; en los
 casos cuya espera se agota, el número de consultas al agente depende del reloj y
-su registro no se compara. Tarda unos 5 minutos:
+su registro no se compara. Los casos marcados con `conocida` son diferencias
+deliberadas: se muestran (con «≈») pero no cuentan como fallo. Tarda unos 10
+minutos:
 
 ```bash
 python3 tools/equivalencia.py --fase 1        # con ../ci-provision/ci-provision.sh
@@ -178,6 +181,14 @@ python3 tools/equivalencia.py RUTA/ci-provision.sh
 Necesita un bash 4 o posterior en el `PATH` (en macOS, el de Homebrew). Cada caso
 lleva la fase a partir de la cual tiene que coincidir; al portar una fase se
 añaden sus casos.
+
+### Diferencias deliberadas con `ci-provision` 3.0.1
+
+- **Resumen de `--gluster-cluster --base IMAGEN`:** `ci-provision.sh` escribe
+  «(nodosIMAGEN)» y «--eliminar server1 server2 server3 server4IMAGEN» (en
+  bash, `${BASE_OPT:- …}` vale `BASE_OPT` cuando está definida), una orden que
+  no funcionaría. `ssoo-us` escribe «(nodos)» y «--eliminar server1 server2
+  server3 server4». Lo fija un test unitario (`TestResumenDelCluster`).
 
 ## Lo que conviene saber antes de tocar el código
 

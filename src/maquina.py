@@ -143,12 +143,17 @@ def crear_maquina(o, vm, host, ip, modo, disco, base, extras=()):
 
 
 def ejecutar_maquina(o):
-    if o.glusterfs and not o.dry_run:
-        raise NoImplementado("--glusterfs")   # fase 4
     # Conflictos con lo que ya exista (y --limpiar, si se pidió)
     comprobar_conflictos(o)
     if o.dry_run:
         mostrar_plan_maquina(o)
+        return
+
+    # Base GlusterFS: se construye, se apaga y se elimina el dominio
+    if o.glusterfs:
+        crear_base_gluster(o, o.vm_name, o.host_name, o.disco_main)
+        o.creacion_completa = True
+        print_summary_base(o)
         return
 
     crear_maquina(o, o.vm_name, o.host_name, o.ip, "normal", o.disco_main, o.base_img, o.extras)
@@ -266,3 +271,30 @@ def avisar_known_hosts(o, ips):
                 print("       Al conectar por SSH verás un aviso de seguridad. Para resolverlo:")
                 avisado = True
             print('         ssh-keygen -f "%s" -R "%s"' % (kh, ip))
+
+
+def print_summary_base(o):
+    """Resumen final de una base GlusterFS (--glusterfs)."""
+    disco = os.path.basename(o.disco_main)
+    orden = "%s %s" % (orden_provision(), prefijo_en_orden(o))
+    print("-------------------------------------------")
+    print("Imagen base GlusterFS lista")
+    print()
+    print("Disco        : %s (%s, %s)" % (o.disco_main, o.tam_disco,
+                                         origen_disco_principal(o, o.base_img)))
+    print("Contenido    : %s con glusterfs-server instalado (y las" % descripcion_imagen(o.imagen))
+    print("               herramientas para formatear en xfs), glusterd habilitado, zona horaria")
+    print("               Europe/Madrid y machine-id vacío")
+    print("Dominio      : %s se ha eliminado; solo queda el disco" % o.vm_name)
+    print()
+    print("Úsalo como respaldo de las copias COW de tus nodos. Con el script:")
+    print("  %s--gluster-cluster --base %s" % (orden, disco))
+    print("  %s--extra-disks --base %s server1 192.168.XXX.10" % (orden, disco))
+    print("O a mano, desde el silo:")
+    print("  cd %s && qemu-img create -f qcow2 -b %s -F qcow2 server1.qcow2 %s"
+          % (o.silo, disco, o.tam_disco))
+    print()
+    print("IMPORTANTE: no borres ni modifiques %s mientras existan copias de él." % disco)
+    if not o.disco_opt:
+        print("Cuando ya no lo necesites:  %s--eliminar %s" % (orden, o.maquina))
+    print("-------------------------------------------")

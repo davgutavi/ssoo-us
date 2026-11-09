@@ -128,8 +128,142 @@ def mostrar_plan_cluster(o):
     print("No se ha creado ni modificado ninguna máquina, disco ni red.")
 
 
+def quitar_dominio_creado(o, dominio):
+    """Quita un dominio del registro de creados (cuando se elimina a propósito)."""
+    o.dominios_creados = [d for d in o.dominios_creados if d != dominio]
+
+
+def crear_base_gluster(o, vm, host, disco):
+    """Base GlusterFS: crea la máquina, espera a que cloud-init termine, la
+    apaga y elimina el dominio. Queda solo el disco, listo para hacer copias
+    COW. Es lo que describen los apartados 2.4 a) y b) del boletín 2, y lo usan
+    tanto --glusterfs como la fase 1 de --gluster-cluster."""
+    crear_maquina(o, vm, host, "", "gluster", disco, o.base_img)
+
+    # Para una base no vale «se da por terminada»: si no se puede consultar
+    # cloud-init, se sigue esperando hasta agotar el tiempo
+    o.exigir_estado_ci = True
+    lista = esperar_maquinas(o, [vm])
+    o.exigir_estado_ci = False
+    if not lista:
+        fallar(70, "No se ha podido confirmar que cloud-init haya terminado en '%s' en %ds.\n"
+                   "Sin esa confirmación no puede servir de base. Comprueba la carga del servidor "
+                   "y vuelve a intentarlo." % (vm, o.esperas["WAIT_TIMEOUT"]))
+
+    if o.estado_ci.get(vm) != "done":
+        # Se conserva la máquina para poder examinarla
+        o.creacion_completa = True
+        if o.no_root:
+            acceso = "ssh administrador@%s    (con tu clave)" % o.ips_detectadas.get(vm, "IP")
+        else:
+            acceso = "virsh console %s    (root, contraseña %s)" % (vm, PASS_CONSOLA)
+        fallar(71, "cloud-init ha terminado con errores en '%s' (probablemente al instalar\n"
+                   "glusterfs-server). Las copias heredarían el problema, así que se detiene "
+                   "aquí.\nLa máquina se conserva para que puedas examinarla:\n"
+                   "  %s\n  y dentro: cloud-init status --long\n"
+                   "Cuando termines, repite el comando añadiendo --limpiar, o elimínala tú:\n"
+                   "  virsh destroy %s; virsh undefine %s --snapshots-metadata; rm %s"
+               % (vm, acceso, vm, vm, disco))
+
+    print("→ Apagando '%s'…" % vm)
+    if not apagar_maquina(o, vm):
+        fallar(70, "La máquina '%s' no se ha apagado en %ds.\n"
+                   "Se deshace lo creado en esta ejecución. Comprueba la carga del servidor "
+                   "(virsh list --all, uptime)\ny vuelve a intentarlo. Si el dominio siguiera "
+                   "ahí: virsh destroy %s; virsh undefine %s --snapshots-metadata"
+               % (vm, o.esperas["SHUTDOWN_TIMEOUT"], vm, vm))
+
+    # El dominio sobra: el disco se queda como respaldo de las copias
+    codigo, _, errores = virsh("undefine", vm, "--snapshots-metadata")
+    if codigo != 0:
+        sys.stderr.write(errores)
+        raise FalloInesperado(codigo)
+    quitar_dominio_creado(o, vm)
+    # A partir de aquí la base ya vale: si falla lo siguiente, se conserva
+    quitar_disco_creado(o, disco)
+    o.base_conservada = disco
+    print("✔ Base lista: %s (el dominio '%s' se ha eliminado; el disco se conserva)."
+          % (os.path.basename(disco), vm))
+
+
+def print_summary_cluster(o):
+    base_disco = disco_base_cluster(o)
+    print("-------------------------------------------")
+    print("Infraestructura GlusterFS creada (boletín 2, epígrafe 2.4)")
+    print()
+    print("Red          : %s" % o.red.nombre)
+    print("Nodos        :")
+    for host, ip_fija in zip(CLUSTER_NODOS, o.cluster_ips):
+        vm = "%s-%s" % (o.prefijo_dominio, host)
+        print("  %-28s %-16s hostname %s" % (vm, o.ips_detectadas.get(vm) or ip_fija, host))
+    print("RAM / vCPUs  : %d MB / %d por nodo" % (o.ram_mb, o.vcpus))
+    print("Sistema      : %s" % descripcion_imagen(o.imagen))
+    print("Discos       : %s..%s (%d × %s) en cada nodo" % (
+        o.unidades_cluster[0], o.unidades_cluster[-1], len(o.unidades_cluster), TAM_DISCO_EXTRA))
+    print("               %s%s" % (texto_discos_montados(o), texto_discos_sin_formatear(o)))
+    print("GlusterFS    : glusterfs-server instalado y glusterd habilitado en todos")
+    print("/etc/hosts   : con los %d nombres, en todos" % len(CLUSTER_NODOS))
+    print()
+    print("Acceso (igual en todos los nodos, con la IP de cada uno):")
+    vm = "%s-%s" % (o.prefijo_dominio, CLUSTER_NODOS[0])
+    bloque_acceso(o, vm, o.ips_detectadas.get(vm) or o.cluster_ips[0])
+    print()
+    print("IMPORTANTE: no borres %s." % base_disco)
+    print("            Los discos de los %d nodos dependen de él." % len(CLUSTER_NODOS))
+    print()
+    # Con --base, la imagen no es de esta infraestructura: solo los nodos
+    print("Para eliminar la infraestructura entera (nodos%s):"
+          % ("" if o.base_opt else " e imagen base"))
+    print("  %s %s--eliminar %s%s" % (orden_provision(), prefijo_en_orden(o), " ".join(CLUSTER_NODOS),
+                                     "" if o.base_opt else " " + CLUSTER_BASE))
+    print("-------------------------------------------")
+
+
 def ejecutar_cluster(o):
-    if not o.dry_run:
-        raise NoImplementado("crear el clúster")   # fase 4
+    base_vm = "%s-%s" % (o.prefijo_dominio, CLUSTER_BASE)
+    base_disco = disco_base_cluster(o)
+
     comprobar_conflictos(o)
-    mostrar_plan_cluster(o)
+    if o.dry_run:
+        mostrar_plan_cluster(o)
+        return
+
+    # Fase 1: base
+    if o.base_opt:
+        print("═══ Fase 1 de 2: se omite; los nodos parten de %s ═══" % os.path.basename(base_disco))
+    else:
+        print("═══ Fase 1 de 2: base GlusterFS (%s) ═══" % base_vm)
+        crear_base_gluster(o, base_vm, CLUSTER_BASE, base_disco)
+    print()
+
+    # Fase 2: nodos
+    print("═══ Fase 2 de 2: %d nodos ═══" % len(CLUSTER_NODOS))
+    nodos = []
+    for host, ip in zip(CLUSTER_NODOS, o.cluster_ips):
+        vm = "%s-%s" % (o.prefijo_dominio, host)
+        print("── %s (%s)" % (vm, ip))
+        crear_maquina(o, vm, host, ip, "nodo", o.silo + "/" + disco_de(o, host), base_disco,
+                      discos_extra_nodo(o, host))
+        nodos.append(vm)
+    o.creacion_completa = True
+    print("✔ Los %d nodos están creados y arrancando." % len(nodos))
+    print("-------------------------------------------")
+
+    if o.no_wait:
+        print("Omitiendo la espera (--no-wait activo).")
+        print("NOTA: los nodos siguen configurándose por dentro (discos xfs, /etc/hosts...).")
+        print("      No se expulsa el medio de cloud-init ni se reinician en frío.")
+        aviso_on_reboot(nodos)
+    else:
+        esperar_maquinas(o, nodos)
+        listos = [vm for vm in nodos if o.estado_ci.get(vm)]
+        sin_terminar = [vm for vm in nodos if not o.estado_ci.get(vm)]
+        for vm in listos:
+            eject_cloudinit_media(vm)
+        if listos:
+            reiniciar_en_frio(o, listos)
+        if sin_terminar:
+            aviso_on_reboot(sin_terminar)
+
+    print_summary_cluster(o)
+    avisar_known_hosts(o, o.cluster_ips)

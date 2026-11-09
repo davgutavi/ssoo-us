@@ -83,6 +83,13 @@ CADENA_ROTA = ('(cd "$SILO" && qemu-img create -u -f qcow2 -b no-existe.qcow2 -F
                '>/dev/null)')
 
 SIN_REGISTRO = {"registro": False}
+# virt-install lento a partir de la segunda llamada (los nodos, tras la base)
+NODOS_LENTOS = r'''mkdir -p "$BATS_TEST_TMPDIR/lento"
+printf '#!/bin/bash\n[[ -f "$MOCK_STATE/virt_install_n" ]] && sleep 15\nexec "%s" "$@"\n' "$MOCKS_DIR/virt-install" > "$BATS_TEST_TMPDIR/lento/virt-install"
+chmod +x "$BATS_TEST_TMPDIR/lento/virt-install"; export PATH="$BATS_TEST_TMPDIR/lento:$PATH"'''
+BASE_EN_EL_RESUMEN = ("ci-provision 3.0.1, con --gluster-cluster --base, escribe «(nodosBASE)» y "
+                      "«--eliminar server1 … server4BASE» (${BASE_OPT:- …} vale BASE_OPT); ssoo-us "
+                      "escribe «(nodos)» y «--eliminar server1 … server4»")
 VIRT_INSTALL_LENTO = r'''mkdir -p "$BATS_TEST_TMPDIR/lento"
 printf '#!/bin/bash\nsleep 6\nexec "%s" "$@"\n' "$MOCKS_DIR/virt-install" > "$BATS_TEST_TMPDIR/lento/virt-install"
 chmod +x "$BATS_TEST_TMPDIR/lento/virt-install"; export PATH="$BATS_TEST_TMPDIR/lento:$PATH"'''
@@ -350,6 +357,44 @@ CASOS = [
      {"registro": False, "senal": ("SIGTERM", 4)}),
     # Ctrl+C mientras virt-install trabaja: se deshace lo creado
     (3, ["--extra-disks", "server1"], {}, VIRT_INSTALL_LENTO, {"registro": False, "senal": ("SIGINT", 3)}),
+
+    # Fase 4: GlusterFS
+    (4, ["--glusterfs", "gluster-base"], {}, ""),
+    (4, ["--imagen", "ubuntu-base", "--glusterfs", "gluster-base"], {}, ""),
+    (4, ["--no-root", "--imagen", "ubuntu-base", "--glusterfs", "gluster-base"], {}, ""),
+    (4, ["--glusterfs", "gluster-base"], {"MOCK_CI_RESULT": "error"}, ""),
+    (4, ["--no-root", "--glusterfs", "gluster-base"], {"MOCK_CI_RESULT": "degraded"}, ""),
+    (4, ["--glusterfs", "gluster-base"], {"MOCK_EXEC_UNSUPPORTED": "1"}, "", SIN_REGISTRO),
+    (4, ["--glusterfs", "--disco", "mibase.qcow2", "--prefijo", "demo", "gb"], {}, ""),
+    (4, ["--prefijo", "demo", "--gluster-cluster"], {}, 'touch "$SILO/gluster-base.qcow2" "$SILO/server1.qcow2"'),
+    (4, ["--si", "--limpiar", "--glusterfs", "gluster-base"], {},
+     'programa --glusterfs gluster-base >/dev/null 2>&1; (cd "$SILO" && qemu-img create -f qcow2 -b '
+     'gluster-base.qcow2 -F qcow2 nodo1.qcow2 64G >/dev/null)'),
+    (4, ["--gluster-cluster"], {"MOCK_VIRT_INSTALL_FALLA_EN": "4"}, ""),
+    (4, ["--gluster-cluster", "--tam", "20G", "--no-root", "--ssh-pass", "Clave1", "--no-virt-viewer"],
+     {}, ""),
+    (4, ["--gluster-cluster", "--imagen", "ubuntu-base", "--tam", "80G"], {}, ""),
+    (4, ["--prefijo", "demo", "--gluster-cluster", "--base", "gluster2.qcow2"], {},
+     'programa --glusterfs gluster-base >/dev/null 2>&1; programa --glusterfs --base gluster-base.qcow2 '
+     'gluster2 >/dev/null 2>&1', {"conocida": BASE_EN_EL_RESUMEN}),
+    (4, ["--gluster-cluster"], {}, ""),
+    (4, ["--gluster-cluster", "--discos-nodo", "7"], {}, ""),
+    (4, ["--gluster-cluster", "--imagen", "debian12"], {}, ""),
+    (4, ["--si", "--limpiar", "--gluster-cluster"], {}, 'touch "$SILO/server3-vdd.qcow2"'),
+    (4, ["--si", "--limpiar", "--gluster-cluster", "--base", "mibase.qcow2"], {},
+     'qemu-img create -f qcow2 -b debian12.qcow2 -F qcow2 "$SILO/mibase.qcow2" 40G >/dev/null; '
+     'touch "$SILO/server2.qcow2"', {"conocida": BASE_EN_EL_RESUMEN}),
+    (4, ["--gluster-cluster"], {"MOCK_SHUTDOWN_NUNCA": "1"}, "", SIN_REGISTRO),
+    (4, ["--gluster-cluster"], {"MOCK_CI_RESULT": "error"}, ""),
+    (4, ["--no-wait", "--gluster-cluster"], {}, ""),
+    (4, ["--gluster-cluster", "--imagen", "ubuntu-base", "--no-wait"], {}, ""),
+    (4, ["--si", "--limpiar", "--gluster-cluster", "--no-wait"], {},
+     'programa --gluster-cluster --imagen ubuntu-base --no-wait >/dev/null 2>&1'),
+    (4, ["--dry-run", "--gluster-cluster"], {}, 'programa --glusterfs gluster-base >/dev/null 2>&1'),
+    (4, ["--dry-run", "--prefijo", "demo", "--gluster-cluster"], {},
+     'programa --prefijo demo --glusterfs gluster-base >/dev/null 2>&1'),
+    # Ctrl+C mientras se crean los nodos: se deshacen, la base terminada se conserva
+    (4, ["--gluster-cluster"], {}, NODOS_LENTOS, {"registro": False, "senal": ("SIGINT", 9)}),
 ]
 
 
@@ -441,7 +486,7 @@ def main():
             detalle, argv = True, argv[1:]
     script = os.path.abspath(argv[0] if argv else
                              os.path.join(RAIZ, "..", "ci-provision", "ci-provision.sh"))
-    distintos = 0
+    distintos = conocidas = 0
     casos = [c for c in CASOS if c[0] <= fase]
     with tempfile.TemporaryDirectory() as tmp:
         directorio = os.path.join(tmp, "caso")
@@ -449,6 +494,7 @@ def main():
             _, args, extra, preparacion = caso[:4]
             opciones = caso[4] if len(caso) > 4 else {}
             con_registro, senal = opciones.get("registro", True), opciones.get("senal")
+            conocida = opciones.get("conocida")
             a = ejecutar_caso(directorio, ["bash", script], args, extra, preparacion, senal)
             ea = estado(directorio, con_registro)
             b = ejecutar_caso(directorio, [sys.executable, SSOO_US, "provision"], args, extra,
@@ -464,11 +510,16 @@ def main():
                 distintos += 1
                 continue
             if a == b and ea == eb:
-                if detalle:
-                    print("✔ [%d] %s" % (a[0], " ".join(args)))
+                if detalle or conocida:
+                    print("✔ [%d] %s%s" % (a[0], " ".join(args),
+                                           "  (se esperaba una diferencia conocida)" if conocida else ""))
                 continue
-            distintos += 1
-            print("✘ %s %s %s" % (" ".join(repr(x) for x in args),
+            if conocida:
+                conocidas += 1
+                print("≈ %s  (diferencia conocida: %s)" % (" ".join(repr(x) for x in args), conocida))
+            else:
+                distintos += 1
+            print("%s %s %s %s" % ("  " if conocida else "✘", " ".join(repr(x) for x in args),
                                   " ".join("%s=%s" % kv for kv in extra.items()),
                                   "(con preparación)" if preparacion else ""))
             for nombre, x, y in (("código", a[0], b[0]), ("salida", a[1], b[1]),
@@ -479,7 +530,9 @@ def main():
                 if ea.get(clave) != eb.get(clave):
                     print("   %s:\n     ci-provision: %r\n     ssoo-us:      %r"
                           % (clave, ea.get(clave), eb.get(clave)))
-    print("%d de %d casos iguales." % (len(casos) - distintos, len(casos)))
+    print("%d de %d casos iguales%s." % (
+        len(casos) - distintos - conocidas, len(casos),
+        "; %d con una diferencia conocida" % conocidas if conocidas else ""))
     return 1 if distintos else 0
 
 
