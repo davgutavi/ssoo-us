@@ -8,12 +8,17 @@ https://github.com/davgutavi/ssoo-us
 Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 """
 
+import base64
 import glob
+import hashlib
 import json
 import os
 import pwd
 import re
 import shutil
+import signal
+import socket
+import stat
 import subprocess
 import sys
 import termios
@@ -76,3 +81,18 @@ def leer_bytes(ruta):
             return f.read()
     except OSError:
         return None
+
+
+def ejecutar_visible(argv, cwd=None, salida=True):
+    """Ejecuta una orden externa dejando que escriba en la terminal (sus errores
+    siempre; su salida, si «salida»), sin teclado y con entorno_ordenes(), como
+    las que ci-provision.sh lanza sin capturar (virt-install, qemu-img create,
+    wget, cp). Devuelve su código, o 127 si no existe."""
+    for flujo in (sys.stdout, sys.stderr):
+        flujo.flush()
+    try:
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, cwd=cwd,
+                              stdout=None if salida else subprocess.DEVNULL,
+                              env=entorno_ordenes()).returncode
+    except OSError:
+        return 127

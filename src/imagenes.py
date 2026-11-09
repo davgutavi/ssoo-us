@@ -281,10 +281,177 @@ def comprobar_imagen_base(o):
             # Se avisa dentro del plan, no aquí, para que salga en orden
             o.base_img_falta = True
             return
-        raise NoImplementado("descarga de la imagen base")   # fase 3
+        descargar_imagen_base(o)
+        recien_descargada = True
+    else:
+        recien_descargada = False
 
+    # -U (force-share) por si alguna máquina en ejecución tiene abierta la
+    # imagen; sin él, qemu-img se niega por el bloqueo de escritura
     formato = formato_de(o.base_img)
     if formato != "qcow2":
+        if recien_descargada:
+            borrar_si_existe(o.base_img)
+            fallar(37, "Lo descargado no es un qcow2 válido (formato: %s); se ha eliminado.\n"
+                       "Puede que la red del servidor esté redirigiendo la descarga. Descárgala "
+                       "tú:\n  wget %s -O %s" % (formato or "desconocido", o.base_img_url,
+                                                o.base_img))
         fallar(37, "La imagen base '%s' no es un qcow2 válido (formato: %s).\n"
                    "Probablemente la descarga falló. Bórrala y vuelve a ejecutar el script, que "
                    "la descargará:\n  rm %s" % (o.base_img, formato or "desconocido", o.base_img))
+
+
+# --- Descarga de la imagen de partida -------------------------------------------------
+
+def descargar(o, url, fichero, silencioso=False):
+    """Descarga URL en FICHERO con wget o, si no hay, con curl. Devuelve el código."""
+    if shutil.which("wget"):
+        orden = ["wget", "-q"] + ([] if silencioso else ["--show-progress"]) + ["-O", fichero, url]
+    elif shutil.which("curl"):
+        orden = ["curl"] + (["-fsSL"] if silencioso else ["-fL", "--progress-bar"]) \
+            + ["-o", fichero, url]
+    else:
+        fallar(38, "No hay ni wget ni curl para descargar la imagen base.\n"
+                   "Descárgala tú en el silo con el nombre %s." % os.path.basename(o.base_img))
+    return ejecutar_visible(orden)
+
+
+def suma_de(fichero, bits):
+    h = hashlib.sha256() if bits == 256 else hashlib.sha512()
+    with open(fichero, "rb") as f:
+        for trozo in iter(lambda: f.read(1 << 20), b""):
+            h.update(trozo)
+    return h.hexdigest()
+
+
+def verificar_suma(o, fichero):
+    """Compara lo descargado con la suma que se publica junto a la imagen. Si no
+    se puede obtener la suma se avisa y se sigue: la imagen se comprueba
+    igualmente con qemu-img."""
+    if not o.base_img_sumas:
+        return
+    sumas = fichero + ".sumas"
+    nombre = os.path.basename(o.base_img_url)
+    bits = 512 if o.base_img_sumas.endswith("SHA512SUMS") else 256
+    if descargar(o, o.base_img_sumas, sumas, silencioso=True) != 0:
+        borrar_si_existe(sumas)
+        print("AVISO: no se ha podido descargar %s para comprobar la imagen." % o.base_img_sumas,
+              file=sys.stderr)
+        return
+    esperadas = []
+    for linea in (leer_bytes(sumas) or b"").decode("utf-8", "replace").split("\n"):
+        campos = linea.split()
+        if len(campos) >= 2 and (campos[1][1:] if campos[1].startswith("*") else campos[1]) == nombre:
+            esperadas.append(campos[0])
+    borrar_si_existe(sumas)
+    esperada = "\n".join(esperadas)
+    if not esperada:
+        print("AVISO: no se ha podido comprobar la suma SHA-%d de la imagen." % bits,
+              file=sys.stderr)
+        return
+    if esperada != suma_de(fichero, bits):
+        borrar_si_existe(fichero)
+        quitar_disco_creado(o, fichero)
+        fallar(37, "Lo descargado no coincide con la suma publicada (%s): la descarga está\n"
+                   "incompleta o alterada, y se ha eliminado. Vuelve a ejecutar el script para "
+                   "repetirla." % o.base_img_sumas)
+    print("✔ Suma SHA-%d comprobada." % bits)
+
+
+def descargar_imagen_base(o):
+    """Copia la imagen del directorio compartido o la descarga. Con un nombre
+    temporal propio de esta ejecución: dos ejecuciones a la vez no se pisan, y
+    una descarga a medias nunca se confunde con la imagen (solo se renombra, de
+    golpe, si termina bien)."""
+    tmp = "%s.descargando.%d" % (o.base_img, os.getpid())
+    tam = "unos 430 MB" if o.imagen == "debian12" else "unos 600 MB"
+    borrar_si_existe(tmp)
+    o.discos_creados.append(tmp)
+
+    compartida = imagen_compartida(o)
+    if compartida:
+        print("→ No está %s en el silo. Se copia de %s…" % (os.path.basename(o.base_img),
+                                                           compartida))
+        codigo = ejecutar_visible(["cp", compartida, tmp])
+        if codigo != 0:
+            borrar_si_existe(tmp)
+            quitar_disco_creado(o, tmp)
+            fallar(37, "No se ha podido copiar %s (código %d)." % (compartida, codigo))
+    else:
+        print("→ No está %s en el silo. Se descarga de:" % os.path.basename(o.base_img))
+        print("  %s  (%s; puede tardar un rato)" % (o.base_img_url, tam))
+        codigo = descargar(o, o.base_img_url, tmp)
+        if codigo != 0:
+            borrar_si_existe(tmp)
+            quitar_disco_creado(o, tmp)
+            fallar(37, "No se ha podido descargar la imagen base (código %d).\n"
+                       "Comprueba la conexión, o descárgala tú:\n  wget %s -O %s"
+                   % (codigo, o.base_img_url, o.base_img))
+        verificar_suma(o, tmp)
+
+    os.replace(tmp, o.base_img)
+    quitar_disco_creado(o, tmp)
+    print("✔ Imagen base lista: %s" % o.base_img)
+
+
+# --- Discos ---------------------------------------------------------------------------
+#
+# Todos los discos los crea el script; los registra en o.discos_creados antes de
+# crearlos, para que se eliminen si la ejecución falla a medias.
+
+def borrar_si_existe(ruta):
+    """rm -f RUTA."""
+    try:
+        os.remove(ruta)
+    except FileNotFoundError:
+        pass
+
+
+def quitar_disco_creado(o, ruta):
+    """Quita un fichero del registro de creados (cuando pasa a ser definitivo)."""
+    o.discos_creados = [d for d in o.discos_creados if d != ruta]
+
+
+def qemu_img_crear(argumentos, cwd=None):
+    """qemu-img con la salida a /dev/null y los errores a la vista; si falla,
+    la ejecución termina de forma inesperada con su código, como con set -e."""
+    codigo = ejecutar_visible(["qemu-img"] + argumentos, cwd=cwd, salida=False)
+    if codigo != 0:
+        raise FalloInesperado(codigo)
+
+
+def crear_disco_cow(o, ruta, base, tam):
+    """Copia COW de una imagen que está en el mismo directorio del silo. El
+    respaldo se referencia con ruta relativa, como hace el manual, para que el
+    silo se pueda mover sin romper la cadena."""
+    o.discos_creados.append(ruta)
+    qemu_img_crear(["create", "-f", "qcow2", "-b", os.path.basename(base), "-F", "qcow2",
+                    os.path.basename(ruta), tam], cwd=os.path.dirname(ruta))
+
+
+def crear_disco_copia(o, ruta, origen, tam):
+    """Copia completa de una imagen de fuera del silo (ubuntu-base, que está en
+    un directorio compartido): una copia COW dependería de un fichero que no es
+    del alumno y que puede cambiar. Si se pide un tamaño mayor, se amplía."""
+    o.discos_creados.append(ruta)
+    codigo = ejecutar_visible(["cp", origen, ruta])
+    if codigo != 0:
+        raise FalloInesperado(codigo)
+    os.chmod(ruta, os.stat(ruta).st_mode | stat.S_IWUSR)
+    vs = tam_virtual(ruta)
+    if re.fullmatch(r"[0-9]+", vs) and tam_a_bytes(tam) > int(vs):
+        qemu_img_crear(["resize", "-q", ruta, tam])
+
+
+def crear_disco_principal(o, ruta, imagen, tam):
+    """Copia COW de una imagen del silo, o copia completa si la imagen está
+    fuera de él (ubuntu-base)."""
+    if os.path.dirname(imagen) == o.silo:
+        crear_disco_cow(o, ruta, imagen, tam)
+    else:
+        crear_disco_copia(o, ruta, imagen, tam)
+
+
+def crear_disco_vacio(o, ruta, tam):
+    o.discos_creados.append(ruta)
+    qemu_img_crear(["create", "-f", "qcow2", ruta, tam])

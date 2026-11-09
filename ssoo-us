@@ -9,12 +9,17 @@ https://github.com/davgutavi/ssoo-us
 Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 """
 
+import base64
 import glob
+import hashlib
 import json
 import os
 import pwd
 import re
 import shutil
+import signal
+import socket
+import stat
 import subprocess
 import sys
 import termios
@@ -77,6 +82,21 @@ def leer_bytes(ruta):
             return f.read()
     except OSError:
         return None
+
+
+def ejecutar_visible(argv, cwd=None, salida=True):
+    """Ejecuta una orden externa dejando que escriba en la terminal (sus errores
+    siempre; su salida, si «salida»), sin teclado y con entorno_ordenes(), como
+    las que ci-provision.sh lanza sin capturar (virt-install, qemu-img create,
+    wget, cp). Devuelve su código, o 127 si no existe."""
+    for flujo in (sys.stdout, sys.stderr):
+        flujo.flush()
+    try:
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, cwd=cwd,
+                              stdout=None if salida else subprocess.DEVNULL,
+                              env=entorno_ordenes()).returncode
+    except OSError:
+        return 127
 
 
 # --- Red virtual: XML de libvirt y aritmética de IPv4 ------------------------------
@@ -537,13 +557,180 @@ def comprobar_imagen_base(o):
             # Se avisa dentro del plan, no aquí, para que salga en orden
             o.base_img_falta = True
             return
-        raise NoImplementado("descarga de la imagen base")   # fase 3
+        descargar_imagen_base(o)
+        recien_descargada = True
+    else:
+        recien_descargada = False
 
+    # -U (force-share) por si alguna máquina en ejecución tiene abierta la
+    # imagen; sin él, qemu-img se niega por el bloqueo de escritura
     formato = formato_de(o.base_img)
     if formato != "qcow2":
+        if recien_descargada:
+            borrar_si_existe(o.base_img)
+            fallar(37, "Lo descargado no es un qcow2 válido (formato: %s); se ha eliminado.\n"
+                       "Puede que la red del servidor esté redirigiendo la descarga. Descárgala "
+                       "tú:\n  wget %s -O %s" % (formato or "desconocido", o.base_img_url,
+                                                o.base_img))
         fallar(37, "La imagen base '%s' no es un qcow2 válido (formato: %s).\n"
                    "Probablemente la descarga falló. Bórrala y vuelve a ejecutar el script, que "
                    "la descargará:\n  rm %s" % (o.base_img, formato or "desconocido", o.base_img))
+
+
+# --- Descarga de la imagen de partida -------------------------------------------------
+
+def descargar(o, url, fichero, silencioso=False):
+    """Descarga URL en FICHERO con wget o, si no hay, con curl. Devuelve el código."""
+    if shutil.which("wget"):
+        orden = ["wget", "-q"] + ([] if silencioso else ["--show-progress"]) + ["-O", fichero, url]
+    elif shutil.which("curl"):
+        orden = ["curl"] + (["-fsSL"] if silencioso else ["-fL", "--progress-bar"]) \
+            + ["-o", fichero, url]
+    else:
+        fallar(38, "No hay ni wget ni curl para descargar la imagen base.\n"
+                   "Descárgala tú en el silo con el nombre %s." % os.path.basename(o.base_img))
+    return ejecutar_visible(orden)
+
+
+def suma_de(fichero, bits):
+    h = hashlib.sha256() if bits == 256 else hashlib.sha512()
+    with open(fichero, "rb") as f:
+        for trozo in iter(lambda: f.read(1 << 20), b""):
+            h.update(trozo)
+    return h.hexdigest()
+
+
+def verificar_suma(o, fichero):
+    """Compara lo descargado con la suma que se publica junto a la imagen. Si no
+    se puede obtener la suma se avisa y se sigue: la imagen se comprueba
+    igualmente con qemu-img."""
+    if not o.base_img_sumas:
+        return
+    sumas = fichero + ".sumas"
+    nombre = os.path.basename(o.base_img_url)
+    bits = 512 if o.base_img_sumas.endswith("SHA512SUMS") else 256
+    if descargar(o, o.base_img_sumas, sumas, silencioso=True) != 0:
+        borrar_si_existe(sumas)
+        print("AVISO: no se ha podido descargar %s para comprobar la imagen." % o.base_img_sumas,
+              file=sys.stderr)
+        return
+    esperadas = []
+    for linea in (leer_bytes(sumas) or b"").decode("utf-8", "replace").split("\n"):
+        campos = linea.split()
+        if len(campos) >= 2 and (campos[1][1:] if campos[1].startswith("*") else campos[1]) == nombre:
+            esperadas.append(campos[0])
+    borrar_si_existe(sumas)
+    esperada = "\n".join(esperadas)
+    if not esperada:
+        print("AVISO: no se ha podido comprobar la suma SHA-%d de la imagen." % bits,
+              file=sys.stderr)
+        return
+    if esperada != suma_de(fichero, bits):
+        borrar_si_existe(fichero)
+        quitar_disco_creado(o, fichero)
+        fallar(37, "Lo descargado no coincide con la suma publicada (%s): la descarga está\n"
+                   "incompleta o alterada, y se ha eliminado. Vuelve a ejecutar el script para "
+                   "repetirla." % o.base_img_sumas)
+    print("✔ Suma SHA-%d comprobada." % bits)
+
+
+def descargar_imagen_base(o):
+    """Copia la imagen del directorio compartido o la descarga. Con un nombre
+    temporal propio de esta ejecución: dos ejecuciones a la vez no se pisan, y
+    una descarga a medias nunca se confunde con la imagen (solo se renombra, de
+    golpe, si termina bien)."""
+    tmp = "%s.descargando.%d" % (o.base_img, os.getpid())
+    tam = "unos 430 MB" if o.imagen == "debian12" else "unos 600 MB"
+    borrar_si_existe(tmp)
+    o.discos_creados.append(tmp)
+
+    compartida = imagen_compartida(o)
+    if compartida:
+        print("→ No está %s en el silo. Se copia de %s…" % (os.path.basename(o.base_img),
+                                                           compartida))
+        codigo = ejecutar_visible(["cp", compartida, tmp])
+        if codigo != 0:
+            borrar_si_existe(tmp)
+            quitar_disco_creado(o, tmp)
+            fallar(37, "No se ha podido copiar %s (código %d)." % (compartida, codigo))
+    else:
+        print("→ No está %s en el silo. Se descarga de:" % os.path.basename(o.base_img))
+        print("  %s  (%s; puede tardar un rato)" % (o.base_img_url, tam))
+        codigo = descargar(o, o.base_img_url, tmp)
+        if codigo != 0:
+            borrar_si_existe(tmp)
+            quitar_disco_creado(o, tmp)
+            fallar(37, "No se ha podido descargar la imagen base (código %d).\n"
+                       "Comprueba la conexión, o descárgala tú:\n  wget %s -O %s"
+                   % (codigo, o.base_img_url, o.base_img))
+        verificar_suma(o, tmp)
+
+    os.replace(tmp, o.base_img)
+    quitar_disco_creado(o, tmp)
+    print("✔ Imagen base lista: %s" % o.base_img)
+
+
+# --- Discos ---------------------------------------------------------------------------
+#
+# Todos los discos los crea el script; los registra en o.discos_creados antes de
+# crearlos, para que se eliminen si la ejecución falla a medias.
+
+def borrar_si_existe(ruta):
+    """rm -f RUTA."""
+    try:
+        os.remove(ruta)
+    except FileNotFoundError:
+        pass
+
+
+def quitar_disco_creado(o, ruta):
+    """Quita un fichero del registro de creados (cuando pasa a ser definitivo)."""
+    o.discos_creados = [d for d in o.discos_creados if d != ruta]
+
+
+def qemu_img_crear(argumentos, cwd=None):
+    """qemu-img con la salida a /dev/null y los errores a la vista; si falla,
+    la ejecución termina de forma inesperada con su código, como con set -e."""
+    codigo = ejecutar_visible(["qemu-img"] + argumentos, cwd=cwd, salida=False)
+    if codigo != 0:
+        raise FalloInesperado(codigo)
+
+
+def crear_disco_cow(o, ruta, base, tam):
+    """Copia COW de una imagen que está en el mismo directorio del silo. El
+    respaldo se referencia con ruta relativa, como hace el manual, para que el
+    silo se pueda mover sin romper la cadena."""
+    o.discos_creados.append(ruta)
+    qemu_img_crear(["create", "-f", "qcow2", "-b", os.path.basename(base), "-F", "qcow2",
+                    os.path.basename(ruta), tam], cwd=os.path.dirname(ruta))
+
+
+def crear_disco_copia(o, ruta, origen, tam):
+    """Copia completa de una imagen de fuera del silo (ubuntu-base, que está en
+    un directorio compartido): una copia COW dependería de un fichero que no es
+    del alumno y que puede cambiar. Si se pide un tamaño mayor, se amplía."""
+    o.discos_creados.append(ruta)
+    codigo = ejecutar_visible(["cp", origen, ruta])
+    if codigo != 0:
+        raise FalloInesperado(codigo)
+    os.chmod(ruta, os.stat(ruta).st_mode | stat.S_IWUSR)
+    vs = tam_virtual(ruta)
+    if re.fullmatch(r"[0-9]+", vs) and tam_a_bytes(tam) > int(vs):
+        qemu_img_crear(["resize", "-q", ruta, tam])
+
+
+def crear_disco_principal(o, ruta, imagen, tam):
+    """Copia COW de una imagen del silo, o copia completa si la imagen está
+    fuera de él (ubuntu-base)."""
+    if os.path.dirname(imagen) == o.silo:
+        crear_disco_cow(o, ruta, imagen, tam)
+    else:
+        crear_disco_copia(o, ruta, imagen, tam)
+
+
+def crear_disco_vacio(o, ruta, tam):
+    o.discos_creados.append(ruta)
+    qemu_img_crear(["create", "-f", "qcow2", ruta, tam])
 
 
 # --- provision: ficheros de cloud-init ---------------------------------------------
@@ -813,6 +1000,61 @@ def red_activa(nombre):
     return False
 
 
+def obtener_ip_agente(vm):
+    """La primera IPv4 no local que reporta el guest agent, o "" si el agente
+    no responde todavía."""
+    for linea in virsh("domifaddr", vm, "--source", "agent")[1].split("\n"):
+        campos = linea.split()
+        if len(campos) >= 4 and campos[2] == "ipv4" and not campos[3].startswith("127."):
+            return campos[3].split("/")[0]
+    return ""
+
+
+def on_reboot_vivo(vm):
+    """on_reboot de la definición con la que se está ejecutando la máquina."""
+    return "\n".join(re.findall(r"<on_reboot>([a-z-]*)</on_reboot>", virsh("dumpxml", vm)[1]))
+
+
+# Expulsión del medio de cloud-init
+#
+# virt-install genera una ISO efímera en /var/lib/libvirt/boot/ con la
+# configuración de cloud-init y la deja enganchada como CD-ROM. libvirt borra
+# ese fichero más adelante, pero la referencia permanece en la definición de la
+# máquina. Si se toma una instantánea mientras la referencia sigue ahí, al
+# revertirla falla con "Cannot access storage file" (apartado B.6 del manual).
+# Expulsando el medio en cuanto la máquina está configurada, las instantáneas
+# que tome después el alumno ya no pueden heredar el problema.
+
+def cloudinit_unidad(vm):
+    """La unidad que tiene enganchada la ISO de cloud-init, mirando tanto la
+    definición activa como la persistente, o "" si no hay ninguna."""
+    salida = virsh("domblklist", vm)[1] + virsh("domblklist", vm, "--inactive")[1]
+    for linea in salida.split("\n"):
+        campos = linea.split()
+        if len(campos) >= 2 and campos[1].endswith("cloudinit.iso"):
+            return campos[0]
+    return ""
+
+
+def eject_cloudinit_media(vm):
+    unidad = cloudinit_unidad(vm)
+    if not unidad:
+        return
+    # Por separado sobre cada definición: según el momento, libvirt ya puede
+    # haber limpiado una de las dos por su cuenta, y entonces esa llamada falla
+    # ('The disk device doesn't have media') aunque la otra sea necesaria y
+    # posible. En una sola llamada con --live --config fallarían las dos.
+    virsh("change-media", vm, unidad, "--eject", "--live")
+    virsh("change-media", vm, unidad, "--eject", "--config")
+    # Lo que decide es el estado final, no el código de los intentos
+    if not cloudinit_unidad(vm):
+        print("✔ Medio de cloud-init expulsado de %s: ya puedes tomar instantáneas." % vm)
+    else:
+        print("AVISO: no se ha podido expulsar el medio de cloud-init de %s (unidad %s)."
+              % (vm, unidad), file=sys.stderr)
+        print("       Apaga la máquina antes de tomar instantáneas.", file=sys.stderr)
+
+
 # --- provision: conflictos con lo que ya existe, y --limpiar -----------------------
 #
 # El script siempre crea dominios y discos nuevos. Si alguno de los que va a
@@ -982,12 +1224,313 @@ def comprobar_conflictos(o, solo_detectar=False):
         print("  (--dry-run: no se elimina nada)")
         print()
         return
-    raise NoImplementado("--limpiar")   # fase 3: confirmar y eliminar
+
+    if not confirmar(o, "¿Eliminar estos elementos?"):
+        print("Cancelado: no se ha eliminado nada.")
+        print("No se ha creado nada. Usa otro nombre de máquina (o --prefijo) para no pisar lo "
+              "que ya tienes.")
+        raise FinProvision(0)
+
+    for d in dominios:
+        virsh("destroy", d)
+        if not virsh_ok("undefine", d, "--snapshots-metadata"):
+            fallar(21, "No se ha podido eliminar el dominio '%s'. Inténtalo a mano:\n"
+                       "  virsh destroy %s; virsh undefine %s --snapshots-metadata" % (d, d, d))
+        print("  ✔ dominio %s eliminado" % d)
+    for f in ficheros:
+        borrar_si_existe(f)
+        print("  ✔ disco %s eliminado" % f)
+    print()
+
+
+RESPUESTAS_SI = ("s", "S", "si", "sí", "Si", "Sí", "SI", "SÍ")
+
+
+def confirmar(o, pregunta):
+    """Pregunta sí/no por teclado. Con --si se da por contestada que sí. Sin
+    terminal y sin --si no se puede preguntar, y eliminar sin confirmación sería
+    peligroso (p.ej. desde un ssh sin sesión): se detiene con el error 23."""
+    if o.si:
+        print("%s [s/N] s   (--si)" % pregunta)
+        return True
+    if not sys.stdin.isatty():
+        fallar(23, "Hace falta confirmar («%s») y no hay terminal para preguntarte.\n"
+                   "No se ha eliminado nada. Si de verdad quieres hacerlo sin preguntas (p.ej. "
+                   "desde\notro script), repite el comando añadiendo --si." % pregunta)
+    # Como «read -r -p»: la pregunta por stderr; sin respuesta (fin de la
+    # entrada), un salto de línea por stdout
+    sys.stderr.write("%s [s/N] " % pregunta)
+    sys.stderr.flush()
+    linea = sys.stdin.readline()
+    if not linea.endswith("\n"):
+        respuesta = ""
+        print()
+    else:
+        respuesta = linea[:-1].strip(" \t")
+    return respuesta in RESPUESTAS_SI
 
 
 def prefijo_en_orden(o):
     """«--prefijo PREFIJO » en las órdenes que se sugieren, si se usó."""
     return "--prefijo %s " % o.prefijo_opt if o.prefijo_opt else ""
+
+
+# --- provision: espera a que cloud-init termine, apagado y reinicio en frío -----------
+#
+# Una espera de duración fija no sirve: las medidas en los tres servidores
+# mostraron que cloud-init tarda entre 60 y 140 segundos según lo que instale y
+# la carga del servidor. En su lugar se consulta al guest agent:
+#
+#   1. Que el agente responda con la IP de la máquina ya dice que ha arrancado
+#      y, en una máquina recién creada, que apt ha terminado (el agente se
+#      instala con cloud-init).
+#   2. Además, a través del propio agente se ejecuta 'cloud-init status' dentro
+#      de la máquina, que dice exactamente si ha terminado. Esto es
+#      imprescindible en los nodos del clúster, donde el agente ya está
+#      instalado de antes y responde mucho antes de que cloud-init acabe.
+#
+# Si el agente no permite ejecutar órdenes, se recurre solo al punto 1 con un
+# pequeño margen, y se avisa.
+
+ORDEN_CLOUDINIT_STATUS = ('{"execute":"guest-exec","arguments":{"path":"/usr/bin/cloud-init",'
+                          '"arg":["status"],"capture-output":true}}')
+
+
+def ahora():
+    """Segundos enteros, como $SECONDS en bash."""
+    return int(time.monotonic())
+
+
+def limpiar_linea():
+    if sys.stdout.isatty():
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
+
+def json_o_nada(texto):
+    try:
+        return json.loads(texto)
+    except ValueError:
+        return None
+
+
+def campo_return(datos, campo):
+    """jq -r '.return.CAMPO // empty'."""
+    if isinstance(datos, dict) and isinstance(datos.get("return"), dict):
+        valor = datos["return"].get(campo)
+        if valor is not None and valor is not False:
+            return valor
+    return None
+
+
+def cloudinit_status(vm):
+    """Ejecuta 'cloud-init status' dentro de la máquina a través del guest agent
+    y devuelve su estado (done, running, error...), o None si no se ha podido
+    consultar. Desde cloud-init 23.4 (Ubuntu 24.04), 'cloud-init status' escribe
+    "done" aunque haya terminado con avisos; lo que lo distingue es el código de
+    salida: 0 bien, 1 error, 2 terminado con avisos ("degraded")."""
+    _, r, _ = virsh("qemu-agent-command", vm, "--timeout", "5", ORDEN_CLOUDINIT_STATUS)
+    pid = campo_return(json_o_nada(r), "pid")
+    if pid is None:
+        return None
+    pid = pid if isinstance(pid, str) else json.dumps(pid)
+    for _ in range(10):
+        time.sleep(1)
+        _, s, _ = virsh("qemu-agent-command", vm, "--timeout", "5",
+                        '{"execute":"guest-exec-status","arguments":{"pid":%s}}' % pid)
+        datos = json_o_nada(s)
+        if campo_return(datos, "exited") is not True:
+            continue
+        try:
+            salida = base64.b64decode(campo_return(datos, "out-data") or "").decode("utf-8", "replace")
+        except (ValueError, TypeError):
+            salida = ""
+        codigo = campo_return(datos, "exitcode")
+        estado = ""
+        for linea in salida.split("\n"):
+            if linea.startswith("status:"):
+                estado = linea[len("status:"):].lstrip(" ")
+                break
+        if estado == "done" and codigo in (2, "2"):
+            estado = "degraded done"
+        return estado
+    return None
+
+
+def maquina_lista(o, vm):
+    """¿Está la máquina lista? Deja la IP en o.ips_detectadas y el estado en
+    o.estado_ci."""
+    ip = obtener_ip_agente(vm)
+    if not ip:
+        return False
+    o.ip_vista[vm] = ip
+    # Si se pidió IP fija, se exige esa IP concreta
+    if o.ip_esperada.get(vm) and ip != o.ip_esperada[vm]:
+        return False
+
+    estado = cloudinit_status(vm)
+    if estado is not None:
+        o.fallos_consulta[vm] = 0
+        o.asumido_desde.pop(vm, None)
+        if estado == "done":
+            o.ips_detectadas[vm], o.estado_ci[vm] = ip, "done"
+            return True
+        if estado in ("error", "degraded done"):
+            o.ips_detectadas[vm], o.estado_ci[vm] = ip, "error"
+            return True
+        return False   # running, not run, disabled...
+
+    # No se ha podido consultar cloud-init. Si pasa varias veces seguidas, se da
+    # la máquina por lista en cuanto lleve GRACE_SECS respondiendo.
+    o.fallos_consulta[vm] = o.fallos_consulta.get(vm, 0) + 1
+    if o.fallos_consulta[vm] >= 3 and not o.exigir_estado_ci:
+        if vm not in o.asumido_desde:
+            o.asumido_desde[vm] = ahora()
+        elif ahora() - o.asumido_desde[vm] >= o.esperas["GRACE_SECS"]:
+            o.ips_detectadas[vm], o.estado_ci[vm] = ip, "asumido"
+            return True
+    return False
+
+
+def esperar_maquinas(o, vms):
+    """Espera hasta que todas las máquinas estén operativas o se agote
+    WAIT_TIMEOUT. True si todas terminaron."""
+    pendientes = list(vms)
+    inicio = ahora()
+    print("Esperando a que cloud-init termine de configurar %d máquina(s)." % len(pendientes))
+    print("Puede tardar entre uno y tres minutos, según lo que haya que instalar.")
+    while True:
+        restantes = []
+        for vm in pendientes:
+            if maquina_lista(o, vm):
+                transcurrido = ahora() - inicio
+                limpiar_linea()
+                estado, ip = o.estado_ci[vm], o.ips_detectadas[vm]
+                if estado == "done":
+                    print("✔ %s operativa tras %ds. IP: %s" % (vm, transcurrido, ip))
+                elif estado == "error":
+                    print("⚠ %s ha arrancado (IP %s), pero cloud-init informa de errores tras %ds."
+                          % (vm, ip, transcurrido))
+                    print("  Entra en la máquina y revisa: sudo cloud-init status --long")
+                else:
+                    print("✔ %s responde tras %ds. IP: %s" % (vm, transcurrido, ip))
+                    print("  (no se ha podido consultar el estado de cloud-init; se da por "
+                          "terminado)")
+            else:
+                restantes.append(vm)
+        pendientes = restantes
+        if not pendientes:
+            return True
+
+        transcurrido = ahora() - inicio
+        if transcurrido >= o.esperas["WAIT_TIMEOUT"]:
+            limpiar_linea()
+            err = sys.stderr
+            print("AVISO: no ha(n) terminado en %ds: %s" % (o.esperas["WAIT_TIMEOUT"],
+                                                         " ".join(pendientes)), file=err)
+            print("       Puede que siga(n) instalando paquetes. Comprueba su estado con:", file=err)
+            for vm in pendientes:
+                print("         virsh domifaddr %s --source agent" % vm, file=err)
+                vista = o.ip_vista.get(vm)
+                if vista:
+                    esperada = o.ip_esperada.get(vm)
+                    if esperada and vista != esperada:
+                        print("         (%s responde en %s y no en la IP fija %s: la configuración "
+                              "de red no se ha aplicado)" % (vm, vista, esperada), file=err)
+                    else:
+                        print("         (%s ya responde en %s; cloud-init sigue trabajando)"
+                              % (vm, vista), file=err)
+            print("       Si no responde, entra por consola: virsh console NOMBRE", file=err)
+            return False
+
+        if sys.stdout.isatty():
+            sys.stdout.write("\r  … %ds  (esperando: %s)" % (transcurrido, " ".join(pendientes)))
+            sys.stdout.flush()
+        time.sleep(o.esperas["POLL_SECS"])
+
+
+def apagar_maquina(o, vm):
+    """Apaga una máquina de forma limpia y espera a que esté parada. False si no
+    se ha apagado en SHUTDOWN_TIMEOUT."""
+    virsh("shutdown", vm)
+    return esperar_apagada(o, vm)
+
+
+def esperar_apagada(o, vm):
+    """Espera a que una máquina esté parada (a quien ya se le ha pedido apagarse)."""
+    inicio = ahora()
+    while True:
+        if virsh_salida("domstate", vm).rstrip("\n") == "shut off":
+            return True
+        if ahora() - inicio >= o.esperas["SHUTDOWN_TIMEOUT"]:
+            return False
+        time.sleep(2)
+
+
+# Reinicio en frío al terminar
+#
+# Con --cloud-init, virt-install arranca la máquina con una definición "de
+# instalación" que tiene on_reboot=destroy: cuenta con estar él presente en el
+# primer reinicio para volver a arrancarla con la definición definitiva
+# (on_reboot=restart). Como se lanza con --noautoconsole, termina enseguida y
+# nadie hace ese segundo arranque: el primer 'reboot' dentro de la máquina la
+# apagaría. Y una instantánea tomada en caliente guardaría ese on_reboot=destroy,
+# así que el problema volvería al revertirla.
+#
+# Apagándola y arrancándola desde fuera, pasa a ejecutarse con la definición
+# persistente, que es la buena. Solo se hace cuando cloud-init ya ha terminado:
+# antes lo interrumpiría.
+
+def aviso_on_reboot(vms):
+    """Aviso para cuando no se ha podido (o no se debía) reiniciar."""
+    err = sys.stderr
+    print("AVISO: tras crearlas, estas máquinas se apagan en su primer reinicio: %s"
+          % " ".join(vms), file=err)
+    print("       Cuando terminen de configurarse, apágalas y arráncalas desde fuera:", file=err)
+    print("         virsh shutdown NOMBRE   (y, cuando esté apagada)   virsh start NOMBRE", file=err)
+    print("       Hazlo antes de tomar instantáneas.", file=err)
+
+
+def reiniciar_en_frio(o, vms):
+    print("→ Apagando y volviendo a arrancar %d máquina(s), para que usen su configuración "
+          "definitiva…" % len(vms))
+    for vm in vms:
+        virsh("shutdown", vm)
+    arrancadas, fallidas = [], []
+    for vm in vms:
+        if esperar_apagada(o, vm) and virsh_ok("start", vm):
+            arrancadas.append(vm)
+        else:
+            fallidas.append(vm)
+
+    # Que vuelvan a responder (con su IP fija, si la tienen)
+    inicio = ahora()
+    pendientes = list(arrancadas)
+    while pendientes:
+        restantes = []
+        for vm in pendientes:
+            ip = obtener_ip_agente(vm)
+            if ip and (not o.ip_esperada.get(vm) or ip == o.ip_esperada[vm]):
+                o.ips_detectadas[vm] = ip
+            else:
+                restantes.append(vm)
+        pendientes = restantes
+        if not pendientes:
+            break
+        if ahora() - inicio >= o.esperas["WAIT_TIMEOUT"]:
+            print("AVISO: no han vuelto a responder en %ds: %s"
+                  % (o.esperas["WAIT_TIMEOUT"], " ".join(pendientes)), file=sys.stderr)
+            print("       Comprueba su estado con: virsh list --all", file=sys.stderr)
+            break
+        time.sleep(o.esperas["POLL_SECS"])
+
+    for vm in arrancadas:
+        if on_reboot_vivo(vm) == "restart":
+            print("✔ %s reiniciada: ya puedes reiniciarla desde dentro y tomar instantáneas." % vm)
+        else:
+            fallidas.append(vm)
+    if fallidas:
+        aviso_on_reboot(fallidas)
 
 
 # --- provision: una máquina suelta ---------------------------------------------------
@@ -1102,13 +1645,162 @@ def mostrar_plan_maquina(o):
     print("No se ha creado ni modificado ninguna máquina, disco ni red.")
 
 
+def crear_dominio(o, nombre):
+    """Ejecuta virt-install y registra el dominio para poder deshacerlo. Se
+    registra ANTES de lanzarlo: si virt-install define el dominio y luego falla
+    (o llega un Ctrl+C), el rollback tiene que eliminarlo."""
+    o.dominios_creados.append(nombre)
+    codigo = ejecutar_visible(o.virt_install_cmd)
+    if codigo != 0:
+        raise FalloInesperado(codigo)
+
+
+def crear_maquina(o, vm, host, ip, modo, disco, base, extras=()):
+    """Una máquina: cloud-init, discos y dominio, registrándolo todo para el
+    rollback. Lo usan la máquina suelta, la base GlusterFS y cada nodo."""
+    generar_cloudinit(o, vm, host, ip, modo)
+    construir_comando(o, vm, o.ram_mb, o.vcpus, [disco] + list(extras))
+
+    print("→ Creando el disco %s (%s, %s)…" % (os.path.basename(disco),
+                                             origen_disco_principal(o, base), o.tam_disco))
+    crear_disco_principal(o, disco, base, o.tam_disco)
+    if extras:
+        print("→ Creando %d discos extra de %s (%s … %s)…" % (
+            len(extras), TAM_DISCO_EXTRA, os.path.basename(extras[0]),
+            os.path.basename(extras[-1])))
+        for d in extras:
+            crear_disco_vacio(o, d, TAM_DISCO_EXTRA)
+
+    print("→ Creando la máquina '%s' con cloud-init…" % vm)
+    crear_dominio(o, vm)
+    if ip:
+        o.ip_esperada[vm] = ip
+
+
 def ejecutar_maquina(o):
+    if o.glusterfs and not o.dry_run:
+        raise NoImplementado("--glusterfs")   # fase 4
     # Conflictos con lo que ya exista (y --limpiar, si se pidió)
     comprobar_conflictos(o)
     if o.dry_run:
         mostrar_plan_maquina(o)
         return
-    raise NoImplementado("crear la máquina")   # fase 3
+
+    crear_maquina(o, o.vm_name, o.host_name, o.ip, "normal", o.disco_main, o.base_img, o.extras)
+    o.creacion_completa = True
+    print("✔ Máquina creada y arrancada.")
+    print("-------------------------------------------")
+
+    if o.no_wait:
+        print("Omitiendo la espera (--no-wait activo).")
+        print("NOTA: la máquina sigue configurándose por dentro. No se expulsa el medio de")
+        print("      cloud-init ni se reinicia en frío.")
+        aviso_on_reboot([o.vm_name])
+    # Solo se expulsa el medio de cloud-init, y se reinicia, si consta que la
+    # máquina ya terminó de configurarse: antes interrumpiría a cloud-init
+    elif esperar_maquinas(o, [o.vm_name]):
+        eject_cloudinit_media(o.vm_name)
+        reiniciar_en_frio(o, [o.vm_name])
+    else:
+        aviso_on_reboot([o.vm_name])
+
+    print_summary(o)
+    avisar_known_hosts(o, [o.ip or o.ips_detectadas.get(o.vm_name, "")])
+
+
+def servidor_fqdn():
+    nombre = socket.gethostname() or "SERVIDOR"
+    return nombre if "." in nombre else nombre + ".lsi.us.es"
+
+
+def bloque_acceso(o, vm, ip):
+    """Líneas de «Acceso» del resumen, iguales para una máquina suelta y para el
+    clúster."""
+    print("  %-42s %s" % ("ssh administrador@%s" % ip, "con tu clave pública"))
+    if o.ssh_pass:
+        print("  %-42s %s" % ("", "(o con la contraseña: %s)" % o.ssh_pass))
+    elif o.imagen == "ubuntu-base":
+        print("  %-42s %s" % ("", "(o con la contraseña de ubuntu-base del boletín 1; sudo la pide)"))
+    consola = "virsh console %s" % vm
+    if o.no_root and not o.ssh_pass and o.imagen == "ubuntu-base":
+        print("  %-42s %s" % (consola, "administrador, con la contraseña de ubuntu-base"))
+    elif o.no_root and not o.ssh_pass:
+        print("  %-42s %s" % (consola, "(con --no-root y sin --ssh-pass nadie entra por consola: "
+                                       "usa SSH)"))
+    elif o.no_root:
+        print("  %-42s %s" % (consola, "administrador, contraseña: %s" % o.ssh_pass))
+    else:
+        print("  %-42s %s" % (consola, "root, contraseña: %s" % PASS_CONSOLA))
+    if not o.no_graficos:
+        print("  virt-viewer --connect qemu+ssh://%s@%s/system %s" % (o.usuario, servidor_fqdn(), vm))
+    if o.imagen == "ubuntu-base" and not o.ssh_pass:
+        print()
+        print("AVISO: 'administrador' conserva la contraseña de ubuntu-base, que es la misma para "
+              "toda")
+        print("       la clase, y entra por SSH con ella (y con sudo). Cualquier usuario del "
+              "servidor")
+        print("       podría entrar en esta máquina. Cámbiala dentro con: passwd")
+
+
+def print_summary(o):
+    """Resumen final de una máquina suelta."""
+    vm_ip = o.ips_detectadas.get(o.vm_name) or o.ip_vista.get(o.vm_name, "")
+    if o.ip and vm_ip and vm_ip != o.ip:
+        ip_mostrar = ("%s (fija)  AVISO: la máquina ha respondido en %s; la configuración de red "
+                      "no se ha aplicado" % (o.ip, vm_ip))
+    elif o.ip:
+        ip_mostrar = "%s (fija)" % o.ip
+    elif vm_ip:
+        ip_mostrar = "%s (DHCP)" % vm_ip
+    else:
+        ip_mostrar = "(DHCP; consúltala con: virsh domifaddr %s --source agent)" % o.vm_name
+
+    print("-------------------------------------------")
+    print("Máquina      : %s  (hostname: %s)" % (o.vm_name, o.host_name))
+    print("Sistema      : %s" % descripcion_imagen(o.imagen))
+    print("Disco        : %s (%s, copia COW de %s)" % (o.disco_main, o.tam_disco,
+                                                       os.path.basename(o.base_img)))
+    print("Red          : %s" % o.red.nombre)
+    print("IP           : %s" % ip_mostrar)
+    print("RAM / vCPUs  : %d MB / %d" % (o.ram_mb, o.vcpus))
+    if o.extra_disks:
+        print("Discos extra : %s..%s (%d × %s), ver: virsh domblklist %s" % (
+            UNIDADES_EXTRA[0], UNIDADES_EXTRA[-1], len(UNIDADES_EXTRA), TAM_DISCO_EXTRA,
+            o.vm_name))
+    else:
+        print("Discos extra : NO")
+    if o.glusterfs:
+        print("GlusterFS    : glusterfs-server instalado, glusterd habilitado, machine-id reseteado")
+    else:
+        print("GlusterFS    : NO")
+    print()
+    print("Acceso:")
+    bloque_acceso(o, o.vm_name, vm_ip or o.ip or "IP")
+    print()
+    print("Para eliminarla con sus discos:  %s %s--eliminar %s"
+          % (orden_provision(), prefijo_en_orden(o), o.maquina))
+    print("-------------------------------------------")
+
+
+def avisar_known_hosts(o, ips):
+    """El DHCP reutiliza direcciones, así que es habitual que la IP de una
+    máquina nueva ya figure en known_hosts con la clave de una máquina anterior:
+    el aviso alarmante del apartado B.2 del manual. Aquí solo se avisa y se da
+    la orden: no se toca el known_hosts del usuario."""
+    kh = o.home + "/.ssh/known_hosts"
+    if not os.path.isfile(kh) or not shutil.which("ssh-keygen"):
+        return
+    avisado = False
+    for ip in ips:
+        if not ip:
+            continue
+        if ejecutar(["ssh-keygen", "-F", ip, "-f", kh])[0] == 0:
+            if not avisado:
+                print()
+                print("AVISO: estas IPs ya figuran en tu known_hosts con la clave de otra máquina.")
+                print("       Al conectar por SSH verás un aviso de seguridad. Para resolverlo:")
+                avisado = True
+            print('         ssh-keygen -f "%s" -R "%s"' % (kh, ip))
 
 
 # --- provision: infraestructura GlusterFS (boletín 2, epígrafe 2.4) -----------------
@@ -1242,11 +1934,10 @@ def mostrar_plan_cluster(o):
 
 
 def ejecutar_cluster(o):
+    if not o.dry_run:
+        raise NoImplementado("crear el clúster")   # fase 4
     comprobar_conflictos(o)
-    if o.dry_run:
-        mostrar_plan_cluster(o)
-        return
-    raise NoImplementado("crear el clúster")   # fase 4
+    mostrar_plan_cluster(o)
 
 
 # --- provision: configuración, opciones y validaciones -------------------------
@@ -1311,6 +2002,20 @@ class FinProvision(Exception):
 
 class NoImplementado(Exception):
     """Lo que todavía no está portado (fases siguientes del port)."""
+
+
+class FalloInesperado(Exception):
+    """Ha fallado una orden externa de la que no se espera que falle (qemu-img
+    create, virt-install, cp...): como set -e en ci-provision.sh, la ejecución
+    termina con su código y se deshace lo creado."""
+
+    def __init__(self, codigo):
+        Exception.__init__(self, codigo)
+        self.codigo = codigo
+
+
+class Interrumpido(Exception):
+    """Ctrl+C, o las señales TERM y HUP."""
 
 
 def fallar(codigo, mensaje):
@@ -1393,7 +2098,20 @@ class Opciones:
         self.virt_install_cmd = []
 
         # Registro de lo creado, para deshacerlo si algo falla a medias
-        self.dirs_creados = []
+        self.dominios_creados = []
+        self.discos_creados = []
+        self.dirs_creados = []        # directorios cloud-init nuevos de esta ejecución
+        self.base_conservada = ""     # base GlusterFS ya terminada: no se deshace
+        self.creacion_completa = False  # ya solo queda esperar: no se deshace nada
+
+        # Espera a cloud-init (espera.py)
+        self.ips_detectadas = {}      # dominio → IP que reporta el agente
+        self.estado_ci = {}           # dominio → done | error | asumido
+        self.ip_esperada = {}         # dominio → IP fija que debe tener
+        self.fallos_consulta = {}     # dominio → veces seguidas sin poder consultar cloud-init
+        self.asumido_desde = {}       # dominio → instante en que se empezó a asumir que está lista
+        self.exigir_estado_ci = False  # True: no vale asumir (la base GlusterFS)
+        self.ip_vista = {}            # dominio → última IP del agente, esté lista o no
 
     @property
     def modo_gestion(self):
@@ -2071,32 +2789,120 @@ def comprobar_ip_en_uso(o, ip, vm):
                % (ip, vm, ips_libres(o), remedio_ip(o)))
 
 
+# --- Deshacer lo creado si la ejecución se interrumpe a medias ----------------------
+#
+# Solo se eliminan los elementos creados por ESTA ejecución: los dominios y los
+# discos que el propio script acaba de crear. Nada preexistente se toca.
+
+def revertir_cambios(o):
+    if not o.dominios_creados and not o.discos_creados:
+        return
+    err = sys.stderr
+    print(file=err)
+    print("Deshaciendo lo que se había creado en esta ejecución:", file=err)
+    for dominio in o.dominios_creados:
+        # Se registra antes de lanzar virt-install: puede que no llegara a definirlo
+        if not virsh_ok("dominfo", dominio):
+            continue
+        virsh("destroy", dominio)
+        if virsh_ok("undefine", dominio, "--snapshots-metadata"):
+            print("  - dominio '%s' eliminado" % dominio, file=err)
+        else:
+            print("  - dominio '%s': no se ha podido eliminar. Hazlo tú: virsh undefine %s "
+                  "--snapshots-metadata" % (dominio, dominio), file=err)
+    for disco in o.discos_creados:
+        if not os.path.exists(disco):
+            continue
+        borrar_si_existe(disco)
+        print("  - disco '%s' eliminado" % disco, file=err)
+    for directorio in o.dirs_creados:
+        if os.path.isdir(directorio):
+            borrar_ruta(directorio)
+            print("  - ficheros cloud-init '%s' eliminados" % directorio, file=err)
+    if o.base_conservada and os.path.exists(o.base_conservada):
+        nombre = os.path.basename(o.base_conservada)
+        print("  - la imagen base %s ya estaba terminada y se conserva:" % nombre, file=err)
+        print("    puedes reutilizarla con --base %s" % nombre, file=err)
+    print("  (nada que existiera antes de ejecutar el script se ha tocado)", file=err)
+
+
+def al_salir(o, codigo, interrumpido=False, inesperado=False):
+    """Lo que hace el «trap al_salir EXIT» de ci-provision.sh."""
+    if codigo == 0:
+        return
+    err = sys.stderr
+    if interrumpido:
+        print(file=err)
+        print("Interrumpido por el usuario.", file=err)
+    elif inesperado:
+        print(file=err)
+        print("ERROR: el script ha terminado de forma inesperada (código %d)." % codigo, file=err)
+        print("       Si el problema persiste, avisa a tu profesor indicando el comando usado.",
+              file=err)
+    if o.creacion_completa:
+        print("Lo creado se conserva: no se deshace nada. Comprueba su estado con:", file=err)
+        print("  virsh list --all", file=err)
+        if interrumpido:
+            print("OJO: no se ha expulsado el medio de cloud-init y la máquina se apagará en su "
+                  "primer", file=err)
+            print("     reinicio. Cuando termine de configurarse, apágala y arráncala desde fuera",
+                  file=err)
+            print("     (virsh shutdown NOMBRE; virsh start NOMBRE) antes de tomar instantáneas.",
+                  file=err)
+    else:
+        revertir_cambios(o)
+
+
+def senal_recibida(numero, marco):
+    raise Interrumpido()
+
+
 # --- Flujo de provision -----------------------------------------------------------
 
 def provision(argv):
     o = Opciones()
+    # Como «trap 'INTERRUMPIDO=true; exit 130' INT TERM HUP»
+    for senal in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(senal, senal_recibida)
     try:
-        # Sin argumentos y desde una terminal: el asistente con menús
-        if not argv and sys.stdin.isatty() and sys.stdout.isatty() and shutil.which("whiptail"):
-            argv = ["--menu"]
-        analizar_opciones(o, argv)
-        validar_opciones(o)
-        calcular_derivados(o)
-        validar_entorno(o)
-        if o.modo_gestion:
-            raise NoImplementado("--menu, --listar y --eliminar")   # fases 5 y 6
-        if o.cluster:
-            ejecutar_cluster(o)
-        else:
-            ejecutar_maquina(o)
-        return 0
+        codigo = ejecutar_provision(o, argv)
     except NoImplementado:
         return no_implementado("provision")
     except FinProvision as e:
         return e.codigo
     except ErrorProvision as e:
         print("ERROR [%d] %s" % (e.codigo, e.mensaje), file=sys.stderr)
+        al_salir(o, e.codigo)
         return e.codigo
+    except FalloInesperado as e:
+        al_salir(o, e.codigo, inesperado=True)
+        return e.codigo
+    except (Interrumpido, KeyboardInterrupt):
+        al_salir(o, 130, interrumpido=True)
+        return 130
+    except Exception as e:   # un error de programación: se deshace igual
+        print("(%s: %s)" % (type(e).__name__, e), file=sys.stderr)
+        al_salir(o, 1, inesperado=True)
+        return 1
+    return codigo
+
+
+def ejecutar_provision(o, argv):
+    """El flujo de main() en ci-provision.sh. Devuelve el código de salida."""
+    # Sin argumentos y desde una terminal: el asistente con menús
+    if not argv and sys.stdin.isatty() and sys.stdout.isatty() and shutil.which("whiptail"):
+        argv = ["--menu"]
+    analizar_opciones(o, argv)
+    validar_opciones(o)
+    calcular_derivados(o)
+    validar_entorno(o)
+    if o.modo_gestion:
+        raise NoImplementado("--menu, --listar y --eliminar")   # fases 5 y 6
+    if o.cluster:
+        ejecutar_cluster(o)
+    else:
+        ejecutar_maquina(o)
+    return 0
 
 
 # --- Programa principal --------------------------------------------------------

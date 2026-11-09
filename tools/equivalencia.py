@@ -13,15 +13,23 @@ Cada orden se ejecuta dos veces, en el mismo directorio y partiendo del mismo
 estado: el entorno de los tests de aceptación (preparar_entorno de
 tests/aceptacion/helpers.bash: HOME de mentira, silo, mocks de virsh y
 virt-install...) más la preparación propia del caso (unas líneas de bash, que
-pueden usar las funciones de helpers.bash). Se comparan:
+pueden usar las funciones de helpers.bash y «programa ARGS», que lanza la
+misma implementación que se está probando: así se preparan los casos de varios
+pasos, como crear una máquina y después repetirla con --limpiar). Se comparan:
 
   - el código, la salida y los errores;
-  - los ficheros que quedan en el silo (nombre y contenido de los de texto);
-  - el registro de llamadas a los mocks ($MOCK_STATE/log).
+  - los ficheros que quedan en el HOME (nombre, permisos y contenido de los de
+    texto);
+  - las máquinas que quedan en el libvirt simulado ($MOCK_STATE/dominios);
+  - el registro de llamadas a los mocks ($MOCK_STATE/log), salvo en los casos
+    marcados con «registro: False», en los que el número de consultas depende
+    del reloj (esperas que se agotan).
 
 Se normaliza lo que tiene que cambiar o cambia solo: la orden («$0» en
 ci-provision.sh, «ssoo-us provision» aquí) → ORDEN; «ci-provision.sh X.Y.Z» y
-«ssoo-us X.Y.Z» → VERSION; la fecha del instance-id.
+«ssoo-us X.Y.Z» → VERSION; la fecha del instance-id; los segundos de «tras Ns»;
+el PID del fichero temporal de la descarga; y el «Terminated: 15 …» que escribe
+bash cuando una señal mata a uno de sus hijos.
 
 Cada caso lleva la fase del port a partir de la cual tiene que coincidir; con
 --fase N se prueban los de las fases 1 a N (por defecto, todos).
@@ -31,9 +39,11 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SSOO_US = os.path.join(RAIZ, "ssoo-us")
@@ -72,7 +82,13 @@ MI_NOBLE = 'cp "$SILO/noble-server-cloudimg-amd64.img" "$SILO/mi-noble.qcow2"'
 CADENA_ROTA = ('(cd "$SILO" && qemu-img create -u -f qcow2 -b no-existe.qcow2 -F qcow2 rota.qcow2 1G '
                '>/dev/null)')
 
-# (fase, argumentos, entorno extra, preparación en bash)
+SIN_REGISTRO = {"registro": False}
+VIRT_INSTALL_LENTO = r'''mkdir -p "$BATS_TEST_TMPDIR/lento"
+printf '#!/bin/bash\nsleep 6\nexec "%s" "$@"\n' "$MOCKS_DIR/virt-install" > "$BATS_TEST_TMPDIR/lento/virt-install"
+chmod +x "$BATS_TEST_TMPDIR/lento/virt-install"; export PATH="$BATS_TEST_TMPDIR/lento:$PATH"'''
+CREAR_SERVER1 = 'programa server1 >/dev/null 2>&1'
+
+# (fase, argumentos, entorno extra, preparación en bash[, opciones])
 CASOS = [
     (1, ["-h"], {}, ""),
     (1, ["--help"], {}, ""),
@@ -264,6 +280,76 @@ CASOS = [
      r'''mkdir -p "$SILO/cloudinit-demo-web" && printf '      - 192.168.7.2/24\n' > "$SILO/cloudinit-demo-web/cip-net.yaml" && definir_dominio demo-web running "$SILO/demo-web.qcow2"'''),
     (2, ["--dry-run", "--limpiar", "--si", "server1", "192.168.7.2"], {},
      r'''mkdir -p "$SILO/cloudinit-${USUARIO}-server1" && printf '      - 192.168.7.2/24\n' > "$SILO/cloudinit-${USUARIO}-server1/cip-net.yaml" && echo 192.168.7.2 > "$MOCK_STATE/ping_responde"'''),
+
+    # Fase 3: máquina suelta
+    (3, ["--no-wait", "server1"], {}, SIN_NOBLE),
+    (3, ["--no-wait", "--imagen", "debian12", "server1"], {}, 'rm -f "$SILO/debian12.qcow2"'),
+    (3, ["server1"], {"MOCK_WGET_FALLA": "1"}, SIN_NOBLE),
+    (3, ["server1"], {"MOCK_WGET_CORRUPTO": "1"}, SIN_NOBLE),
+    (3, ["--no-wait", "server1"], {"MOCK_SUMAS_FALLA": "1"}, SIN_NOBLE),
+    (3, ["server1"], {"MOCK_SUMAS_MAL": "1"}, SIN_NOBLE),
+    (3, ["--no-wait", "server1"], {}, SIN_NOBLE + '; cp "$SILO/debian12.qcow2" '
+                                                 '"$CI_PROVISION_DIR_COMPARTIDO/noble-server-cloudimg-amd64.img"'),
+    (3, ["server1"], {}, ""),
+    (3, ["--no-root", "server1"], {}, ""),
+    (3, ["--no-virt-viewer", "server1"], {}, ""),
+    (3, ["--no-root", "--ssh-pass", "MiPass1", "server1"], {}, ""),
+    (3, ["--base", "mibase.qcow2", "server1", "192.168.7.10"], {},
+     'qemu-img create -f qcow2 -b noble-server-cloudimg-amd64.img -F qcow2 "$SILO/mibase.qcow2" 3G '
+     '>/dev/null; rm -f "$SILO/debian12.qcow2"'),
+    (3, ["--ssh-pass", "MiPass1", "server1"], {}, ""),
+    (3, ["--extra-disks", "server1", "192.168.7.2"], {}, ""),
+    (3, ["--disco", "mio.qcow2", "--tam", "20G", "server1"], {}, ""),
+    (3, ["--si", "--limpiar", "--prefijo", "demo", "--extra-disks", "server1"], {}, CREAR_SERVER1),
+    (3, ["--extra-disks", "server1"], {"MOCK_VIRT_INSTALL_FALLA_TARDE": "1"}, ""),
+    (3, ["--extra-disks", "server1"], {"MOCK_VIRT_INSTALL_FALLA": "1"}, ""),
+    (3, ["--no-wait", "--base", "grande.qcow2", "server1"], {},
+     'qemu-img create -f qcow2 "$SILO/grande.qcow2" 50G >/dev/null'),
+    (3, ["server1"], {"MOCK_CI_RESULT": "degraded"}, ""),
+    (3, ["server1"], {"MOCK_CI_RESULT": "error"}, ""),
+    (3, ["server1"], {"MOCK_CI_RUNNING": "999", "CI_PROVISION_WAIT_TIMEOUT": "3"}, "", SIN_REGISTRO),
+    (3, ["server1", "192.168.7.2"], {"MOCK_CI_RUNNING": "999", "CI_PROVISION_WAIT_TIMEOUT": "3"},
+     "", SIN_REGISTRO),
+    (3, ["server1"], {"MOCK_EXEC_PENDIENTE": "3"}, ""),
+    (3, ["server1"], {"MOCK_AGENT_DELAY": "3"}, ""),
+    (3, ["server1"], {"MOCK_CI_RUNNING": "3"}, ""),
+    (3, ["server1"], {"MOCK_EXEC_UNSUPPORTED": "1"}, "", SIN_REGISTRO),
+    (3, ["server1"], {"MOCK_AGENT_DELAY": "999", "CI_PROVISION_WAIT_TIMEOUT": "3"}, "", SIN_REGISTRO),
+    (3, ["--si", "--limpiar", "server1"], {"MOCK_UNDEFINE_FALLA": "1"}, CREAR_SERVER1),
+    (3, ["server1"], {"MOCK_EJECT_NUNCA": "1"}, ""),
+    (3, ["server1"], {"MOCK_ISO_PERSISTENTE": "1"}, ""),
+    (3, ["server1"], {"MOCK_VARIAS_IFACES": "1"}, ""),
+    (3, ["server1"], {"MOCK_SHUTDOWN_NUNCA": "1"}, "", SIN_REGISTRO),
+    (3, ["server1", "192.168.7.2"], {},
+     'echo "192.168.7.2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOldKeyOldKeyOldKeyOldKeyOldKeyOldKeyOldKey" '
+     '> "$HOME/.ssh/known_hosts"'),
+    (3, ["server1"], {},
+     'echo "192.168.7.201 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOldKeyOldKeyOldKeyOldKeyOldKeyOldKeyOldKey" '
+     '> "$HOME/.ssh/known_hosts"'),
+    (3, ["--ram", "4096", "--vcpus", "4", "server1"], {}, ""),
+    (3, ["--no-wait", "server1"], {}, ""),
+    (3, ["server1"], {}, 'programa --no-wait server1 >/dev/null 2>&1; rm -f "$SILO/server1.qcow2"'),
+    (3, ["--si", "--limpiar", "--extra-disks", "server1"], {},
+     'programa --no-wait --extra-disks server1 >/dev/null 2>&1; touch "$SILO/otro.qcow2" '
+     '"$SILO/server2.qcow2"; : > "$MOCK_STATE/log"'),
+    (3, ["--limpiar", "server1"], {}, CREAR_SERVER1),
+    (3, ["--si", "--limpiar", "server1"], {}, 'touch "$SILO/server1.qcow2"'),
+    (3, ["--si", "--limpiar", "server1"], {}, 'touch "$SILO/server1.qcow2"; definir_dominio '
+                                              '"${USUARIO}-server1" shut\\ off "$SILO/server1.qcow2"'),
+    (3, ["--dry-run", "server2", "192.168.7.2"], {}, 'programa server1 192.168.7.2 >/dev/null 2>&1'),
+    (3, ["--si", "--limpiar", "server1", "192.168.7.2"], {},
+     'programa server1 192.168.7.2 >/dev/null 2>&1; echo 192.168.7.2 > "$MOCK_STATE/ping_responde"'),
+    (3, ["--dry-run", "--base", "server1.qcow2", "server2"], {},
+     CREAR_SERVER1 + '; virsh shutdown "${USUARIO}-server1" >/dev/null'),
+    (3, ["--prefijo", "demo", "--no-root", "--no-virt-viewer", "--ssh-pass", "a b'c", "web",
+         "192.168.7.3"], {}, ""),
+    # Ctrl+C (SIGINT a todo el grupo, como la terminal) y SIGTERM durante la espera
+    (3, ["server1"], {"MOCK_AGENT_DELAY": "999", "CI_PROVISION_WAIT_TIMEOUT": "60"}, "",
+     {"registro": False, "senal": ("SIGINT", 4)}),
+    (3, ["server1"], {"MOCK_AGENT_DELAY": "999", "CI_PROVISION_WAIT_TIMEOUT": "60"}, "",
+     {"registro": False, "senal": ("SIGTERM", 4)}),
+    # Ctrl+C mientras virt-install trabaja: se deshace lo creado
+    (3, ["--extra-disks", "server1"], {}, VIRT_INSTALL_LENTO, {"registro": False, "senal": ("SIGINT", 3)}),
 ]
 
 
@@ -274,24 +360,33 @@ def preparar(directorio):
     os.makedirs(directorio)
 
 
-def ejecutar_caso(directorio, orden, extra, preparacion):
-    """Prepara el entorno de helpers.bash, aplica la preparación y lanza la
-    orden en el mismo bash. Devuelve (código, salida, errores)."""
+def ejecutar_caso(directorio, programa, args, extra, preparacion, senal=None):
+    """Prepara el entorno de helpers.bash, aplica la preparación y lanza
+    «programa ARGS» en el mismo bash. Devuelve (código, salida, errores)."""
     preparar(directorio)
-    # Las variables del caso, después de preparar_entorno, que fija las suyas
+    # Las variables del caso, después de preparar_entorno (que fija las suyas)
+    # y de la preparación
     exportar = "".join("export %s=%s; " % (k, shlex.quote(v)) for k, v in extra.items())
-    guion = ('source "$1"; preparar_entorno || exit 99; eval "$2" || exit 98; shift 2; '
-             + exportar + '"$@"')
+    guion = ('source "$1"; preparar_entorno || exit 99; prep="$2"; shift 2; ORDEN_PRUEBA=(); '
+             'while [[ "$1" != "--" ]]; do ORDEN_PRUEBA+=("$1"); shift; done; shift; '
+             'programa() { "${ORDEN_PRUEBA[@]}" "$@"; }; eval "$prep" || exit 98; '
+             + exportar + 'programa "$@"')
     entorno = dict(os.environ, BATS_TEST_FILENAME=os.path.join(ACEPTACION, "ci-provision.bats"),
                    BATS_TEST_TMPDIR=directorio)
-    p = subprocess.run(["bash", "-c", guion, "_", os.path.join(ACEPTACION, "helpers.bash"),
-                        preparacion] + orden,
-                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       env=entorno, timeout=300)
-    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+    orden = (["bash", "-c", guion, "_", os.path.join(ACEPTACION, "helpers.bash"), preparacion]
+             + programa + ["--"] + args)
+    # Con señal: en su propio grupo de procesos, que la recibe entero a los N
+    # segundos, como con Ctrl+C en una terminal
+    p = subprocess.Popen(orden, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, env=entorno, start_new_session=bool(senal))
+    if senal:
+        time.sleep(senal[1])
+        os.killpg(p.pid, getattr(signal, senal[0]))
+    salida, errores = p.communicate(timeout=300)
+    return p.returncode, salida.decode("utf-8", "replace"), errores.decode("utf-8", "replace")
 
 
-def estado(directorio):
+def estado(directorio, con_registro=True):
     """Los ficheros del HOME (nombre y, si es texto, contenido) y el registro
     de los mocks."""
     resultado = {}
@@ -311,8 +406,16 @@ def estado(directorio):
                 resultado[clave] = modo + " (binario)"
             else:
                 resultado[clave] = modo + " " + datos.decode("utf-8", "replace")
+    dominios = os.path.join(directorio, "mock", "dominios")
+    if os.path.isdir(dominios):
+        for dominio in sorted(os.listdir(dominios)):
+            for nombre in ("estado", "discos", "ip", "iso", "iso_persistente", "on_reboot_vivo"):
+                ruta = os.path.join(dominios, dominio, nombre)
+                if os.path.exists(ruta):
+                    with open(ruta, encoding="utf-8", errors="replace") as f:
+                        resultado["(libvirt) %s/%s" % (dominio, nombre)] = f.read()
     registro = os.path.join(directorio, "mock", "log")
-    if os.path.exists(registro):
+    if con_registro and os.path.exists(registro):
         with open(registro, encoding="utf-8", errors="replace") as f:
             resultado["(registro de los mocks)"] = f.read()
     return resultado
@@ -321,7 +424,11 @@ def estado(directorio):
 def normalizar(texto, orden):
     texto = texto.replace(orden, "ORDEN")
     texto = re.sub(r"^(ci-provision\.sh|ssoo-us) [0-9][^\s]*$", "VERSION", texto, flags=re.M)
-    return re.sub(r"(instance-id: \S*)-[0-9]{14}$", r"\1-FECHA", texto, flags=re.M)
+    texto = re.sub(r"(instance-id: \S*)-[0-9]{14}$", r"\1-FECHA", texto, flags=re.M)
+    texto = re.sub(r"\.descargando\.[0-9]+", ".descargando.PID", texto)
+    # Lo que escribe bash (no el script) cuando una señal mata a un hijo suyo
+    texto = re.sub(r"^Terminated: 15 .*\n", "", texto, flags=re.M)
+    return re.sub(r" tras [0-9]+s", " tras Ns", texto)
 
 
 def main():
@@ -338,12 +445,15 @@ def main():
     casos = [c for c in CASOS if c[0] <= fase]
     with tempfile.TemporaryDirectory() as tmp:
         directorio = os.path.join(tmp, "caso")
-        for _, args, extra, preparacion in casos:
-            a = ejecutar_caso(directorio, ["bash", script] + args, extra, preparacion)
-            ea = estado(directorio)
-            b = ejecutar_caso(directorio, [sys.executable, SSOO_US, "provision"] + args, extra,
-                              preparacion)
-            eb = estado(directorio)
+        for caso in casos:
+            _, args, extra, preparacion = caso[:4]
+            opciones = caso[4] if len(caso) > 4 else {}
+            con_registro, senal = opciones.get("registro", True), opciones.get("senal")
+            a = ejecutar_caso(directorio, ["bash", script], args, extra, preparacion, senal)
+            ea = estado(directorio, con_registro)
+            b = ejecutar_caso(directorio, [sys.executable, SSOO_US, "provision"], args, extra,
+                              preparacion, senal)
+            eb = estado(directorio, con_registro)
             orden_b = SSOO_US + " provision"
             a = (a[0], normalizar(a[1], script), normalizar(a[2], script))
             b = (b[0], normalizar(b[1], orden_b), normalizar(b[2], orden_b))

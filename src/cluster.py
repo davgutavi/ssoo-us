@@ -129,8 +129,7 @@ def mostrar_plan_cluster(o):
 
 
 def ejecutar_cluster(o):
+    if not o.dry_run:
+        raise NoImplementado("crear el clúster")   # fase 4
     comprobar_conflictos(o)
-    if o.dry_run:
-        mostrar_plan_cluster(o)
-        return
-    raise NoImplementado("crear el clúster")   # fase 4
+    mostrar_plan_cluster(o)

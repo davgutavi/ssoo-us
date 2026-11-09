@@ -62,6 +62,20 @@ class NoImplementado(Exception):
     """Lo que todavía no está portado (fases siguientes del port)."""
 
 
+class FalloInesperado(Exception):
+    """Ha fallado una orden externa de la que no se espera que falle (qemu-img
+    create, virt-install, cp...): como set -e en ci-provision.sh, la ejecución
+    termina con su código y se deshace lo creado."""
+
+    def __init__(self, codigo):
+        Exception.__init__(self, codigo)
+        self.codigo = codigo
+
+
+class Interrumpido(Exception):
+    """Ctrl+C, o las señales TERM y HUP."""
+
+
 def fallar(codigo, mensaje):
     raise ErrorProvision(codigo, mensaje)
 
@@ -142,7 +156,20 @@ class Opciones:
         self.virt_install_cmd = []
 
         # Registro de lo creado, para deshacerlo si algo falla a medias
-        self.dirs_creados = []
+        self.dominios_creados = []
+        self.discos_creados = []
+        self.dirs_creados = []        # directorios cloud-init nuevos de esta ejecución
+        self.base_conservada = ""     # base GlusterFS ya terminada: no se deshace
+        self.creacion_completa = False  # ya solo queda esperar: no se deshace nada
+
+        # Espera a cloud-init (espera.py)
+        self.ips_detectadas = {}      # dominio → IP que reporta el agente
+        self.estado_ci = {}           # dominio → done | error | asumido
+        self.ip_esperada = {}         # dominio → IP fija que debe tener
+        self.fallos_consulta = {}     # dominio → veces seguidas sin poder consultar cloud-init
+        self.asumido_desde = {}       # dominio → instante en que se empezó a asumir que está lista
+        self.exigir_estado_ci = False  # True: no vale asumir (la base GlusterFS)
+        self.ip_vista = {}            # dominio → última IP del agente, esté lista o no
 
     @property
     def modo_gestion(self):
@@ -820,29 +847,117 @@ def comprobar_ip_en_uso(o, ip, vm):
                % (ip, vm, ips_libres(o), remedio_ip(o)))
 
 
+# --- Deshacer lo creado si la ejecución se interrumpe a medias ----------------------
+#
+# Solo se eliminan los elementos creados por ESTA ejecución: los dominios y los
+# discos que el propio script acaba de crear. Nada preexistente se toca.
+
+def revertir_cambios(o):
+    if not o.dominios_creados and not o.discos_creados:
+        return
+    err = sys.stderr
+    print(file=err)
+    print("Deshaciendo lo que se había creado en esta ejecución:", file=err)
+    for dominio in o.dominios_creados:
+        # Se registra antes de lanzar virt-install: puede que no llegara a definirlo
+        if not virsh_ok("dominfo", dominio):
+            continue
+        virsh("destroy", dominio)
+        if virsh_ok("undefine", dominio, "--snapshots-metadata"):
+            print("  - dominio '%s' eliminado" % dominio, file=err)
+        else:
+            print("  - dominio '%s': no se ha podido eliminar. Hazlo tú: virsh undefine %s "
+                  "--snapshots-metadata" % (dominio, dominio), file=err)
+    for disco in o.discos_creados:
+        if not os.path.exists(disco):
+            continue
+        borrar_si_existe(disco)
+        print("  - disco '%s' eliminado" % disco, file=err)
+    for directorio in o.dirs_creados:
+        if os.path.isdir(directorio):
+            borrar_ruta(directorio)
+            print("  - ficheros cloud-init '%s' eliminados" % directorio, file=err)
+    if o.base_conservada and os.path.exists(o.base_conservada):
+        nombre = os.path.basename(o.base_conservada)
+        print("  - la imagen base %s ya estaba terminada y se conserva:" % nombre, file=err)
+        print("    puedes reutilizarla con --base %s" % nombre, file=err)
+    print("  (nada que existiera antes de ejecutar el script se ha tocado)", file=err)
+
+
+def al_salir(o, codigo, interrumpido=False, inesperado=False):
+    """Lo que hace el «trap al_salir EXIT» de ci-provision.sh."""
+    if codigo == 0:
+        return
+    err = sys.stderr
+    if interrumpido:
+        print(file=err)
+        print("Interrumpido por el usuario.", file=err)
+    elif inesperado:
+        print(file=err)
+        print("ERROR: el script ha terminado de forma inesperada (código %d)." % codigo, file=err)
+        print("       Si el problema persiste, avisa a tu profesor indicando el comando usado.",
+              file=err)
+    if o.creacion_completa:
+        print("Lo creado se conserva: no se deshace nada. Comprueba su estado con:", file=err)
+        print("  virsh list --all", file=err)
+        if interrumpido:
+            print("OJO: no se ha expulsado el medio de cloud-init y la máquina se apagará en su "
+                  "primer", file=err)
+            print("     reinicio. Cuando termine de configurarse, apágala y arráncala desde fuera",
+                  file=err)
+            print("     (virsh shutdown NOMBRE; virsh start NOMBRE) antes de tomar instantáneas.",
+                  file=err)
+    else:
+        revertir_cambios(o)
+
+
+def senal_recibida(numero, marco):
+    raise Interrumpido()
+
+
 # --- Flujo de provision -----------------------------------------------------------
 
 def provision(argv):
     o = Opciones()
+    # Como «trap 'INTERRUMPIDO=true; exit 130' INT TERM HUP»
+    for senal in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(senal, senal_recibida)
     try:
-        # Sin argumentos y desde una terminal: el asistente con menús
-        if not argv and sys.stdin.isatty() and sys.stdout.isatty() and shutil.which("whiptail"):
-            argv = ["--menu"]
-        analizar_opciones(o, argv)
-        validar_opciones(o)
-        calcular_derivados(o)
-        validar_entorno(o)
-        if o.modo_gestion:
-            raise NoImplementado("--menu, --listar y --eliminar")   # fases 5 y 6
-        if o.cluster:
-            ejecutar_cluster(o)
-        else:
-            ejecutar_maquina(o)
-        return 0
+        codigo = ejecutar_provision(o, argv)
     except NoImplementado:
         return no_implementado("provision")
     except FinProvision as e:
         return e.codigo
     except ErrorProvision as e:
         print("ERROR [%d] %s" % (e.codigo, e.mensaje), file=sys.stderr)
+        al_salir(o, e.codigo)
         return e.codigo
+    except FalloInesperado as e:
+        al_salir(o, e.codigo, inesperado=True)
+        return e.codigo
+    except (Interrumpido, KeyboardInterrupt):
+        al_salir(o, 130, interrumpido=True)
+        return 130
+    except Exception as e:   # un error de programación: se deshace igual
+        print("(%s: %s)" % (type(e).__name__, e), file=sys.stderr)
+        al_salir(o, 1, inesperado=True)
+        return 1
+    return codigo
+
+
+def ejecutar_provision(o, argv):
+    """El flujo de main() en ci-provision.sh. Devuelve el código de salida."""
+    # Sin argumentos y desde una terminal: el asistente con menús
+    if not argv and sys.stdin.isatty() and sys.stdout.isatty() and shutil.which("whiptail"):
+        argv = ["--menu"]
+    analizar_opciones(o, argv)
+    validar_opciones(o)
+    calcular_derivados(o)
+    validar_entorno(o)
+    if o.modo_gestion:
+        raise NoImplementado("--menu, --listar y --eliminar")   # fases 5 y 6
+    if o.cluster:
+        ejecutar_cluster(o)
+    else:
+        ejecutar_maquina(o)
+    return 0

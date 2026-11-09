@@ -167,7 +167,50 @@ def comprobar_conflictos(o, solo_detectar=False):
         print("  (--dry-run: no se elimina nada)")
         print()
         return
-    raise NoImplementado("--limpiar")   # fase 3: confirmar y eliminar
+
+    if not confirmar(o, "¿Eliminar estos elementos?"):
+        print("Cancelado: no se ha eliminado nada.")
+        print("No se ha creado nada. Usa otro nombre de máquina (o --prefijo) para no pisar lo "
+              "que ya tienes.")
+        raise FinProvision(0)
+
+    for d in dominios:
+        virsh("destroy", d)
+        if not virsh_ok("undefine", d, "--snapshots-metadata"):
+            fallar(21, "No se ha podido eliminar el dominio '%s'. Inténtalo a mano:\n"
+                       "  virsh destroy %s; virsh undefine %s --snapshots-metadata" % (d, d, d))
+        print("  ✔ dominio %s eliminado" % d)
+    for f in ficheros:
+        borrar_si_existe(f)
+        print("  ✔ disco %s eliminado" % f)
+    print()
+
+
+RESPUESTAS_SI = ("s", "S", "si", "sí", "Si", "Sí", "SI", "SÍ")
+
+
+def confirmar(o, pregunta):
+    """Pregunta sí/no por teclado. Con --si se da por contestada que sí. Sin
+    terminal y sin --si no se puede preguntar, y eliminar sin confirmación sería
+    peligroso (p.ej. desde un ssh sin sesión): se detiene con el error 23."""
+    if o.si:
+        print("%s [s/N] s   (--si)" % pregunta)
+        return True
+    if not sys.stdin.isatty():
+        fallar(23, "Hace falta confirmar («%s») y no hay terminal para preguntarte.\n"
+                   "No se ha eliminado nada. Si de verdad quieres hacerlo sin preguntas (p.ej. "
+                   "desde\notro script), repite el comando añadiendo --si." % pregunta)
+    # Como «read -r -p»: la pregunta por stderr; sin respuesta (fin de la
+    # entrada), un salto de línea por stdout
+    sys.stderr.write("%s [s/N] " % pregunta)
+    sys.stderr.flush()
+    linea = sys.stdin.readline()
+    if not linea.endswith("\n"):
+        respuesta = ""
+        print()
+    else:
+        respuesta = linea[:-1].strip(" \t")
+    return respuesta in RESPUESTAS_SI
 
 
 def prefijo_en_orden(o):
