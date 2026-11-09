@@ -91,6 +91,18 @@ VIRT_INSTALL_LENTO = r'''mkdir -p "$BATS_TEST_TMPDIR/lento"
 printf '#!/bin/bash\nsleep 6\nexec "%s" "$@"\n' "$MOCKS_DIR/virt-install" > "$BATS_TEST_TMPDIR/lento/virt-install"
 chmod +x "$BATS_TEST_TMPDIR/lento/virt-install"; export PATH="$BATS_TEST_TMPDIR/lento:$PATH"'''
 CREAR_SERVER1 = 'programa server1 >/dev/null 2>&1'
+LISTA_DEL_ASISTENTE = ("ci-provision lee las imágenes base una vez por sesión del asistente y, tras "
+                       "crear un disco desde él, la lista lo describe como «disco suelto»; ssoo-us "
+                       "las vuelve a leer")
+
+
+def respuestas(*lineas):
+    """Preparación: las respuestas del whiptail simulado, una por diálogo. Van
+    entre comillas dobles: $SILO y ${USUARIO} se expanden."""
+    return ('printf "%%s\\n" %s > "$BATS_TEST_TMPDIR/respuestas"; '
+            'export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"'
+            % " ".join('"%s"' % x.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`")
+                       for x in lineas))
 
 # (fase, argumentos, entorno extra, preparación en bash[, opciones])
 CASOS = [
@@ -457,6 +469,65 @@ CASOS = [
     (5, ["--eliminar-todo"], {}, CREAR_SERVER1 + '; touch "$SILO/mi-copia-seguridad.qcow2"'),
     (5, ["--eliminar-todo"], {}, 'touch "$SILO/mi-copia-seguridad.qcow2"'),
     (5, ["--si", "--eliminar-todo"], {"MOCK_UNDEFINE_FALLA": "1"}, CREAR_SERVER1),
+
+    # Fase 6: el asistente (--menu). Las respuestas del whiptail simulado, una
+    # por diálogo: «0 valor» acepta, «1» cancela, «255» es Esc
+    (6, ["--menu"], {}, respuestas("1")),
+    (6, ["--menu"], {}, respuestas("255")),
+    (6, ["--menu"], {}, respuestas("0 salir")),
+    (6, ["--menu"], {}, respuestas("0 basica", "0 server1", "0 ", "0 debian12",
+                                   '0 "extra-disks" "no-root"', "0", "0 salir")),
+    (6, ["--menu"], {}, respuestas("0 cluster", "0 debian12", '0 "discos-crea-entorno"', "0", "1")),
+    (6, ["--menu"], {}, 'programa --glusterfs gluster-base >/dev/null 2>&1; '
+                        + respuestas("0 cluster", "0", '0 "limpiar"', "0", "1")),
+    (6, ["--menu"], {}, 'programa --glusterfs gluster-base >/dev/null 2>&1; '
+                        + respuestas("0 cluster", "1", "0 ubuntu-base", '0 "no-root"', "1", "1")),
+    (6, ["--menu", "--si"], {}, respuestas("0 extra", "0 server1", "0 192.168.7.2", "0 noble",
+                                           '0 "extra-disks"', "0", "0 eliminar", '0 "server1"', "0",
+                                           "1")),
+    (6, ["--menu"], {}, 'programa --extra-disks server1 >/dev/null 2>&1; programa --imagen debian12 '
+                        '--glusterfs glusterbase >/dev/null 2>&1; '
+                        + respuestas("0 listar", "0 m:${USUARIO}-server1", "0",
+                                     "0 d:$SILO/glusterbase.qcow2", "0", "0 d:$SILO/debian12.qcow2",
+                                     "0", "1", "1")),
+    (6, ["--menu"], {}, respuestas("0 basica", "0 web", "0 ", "0 noble", '0 "ssh-pass"',
+                                   "0 Secreta1", "0", "1")),
+    (6, ["--menu", "--dry-run"], {}, respuestas("0 basica", "0 web", "0 ", "0 noble",
+                                                '0 "ssh-pass" "limpiar"', "0 Secreta1", "0", "1")),
+    (6, ["--menu"], {}, respuestas("0 basica", "0 web", "0 ", "0 noble", '0 "ssh-pass"', "0 ",
+                                   "1")),
+    (6, ["--menu"], {}, respuestas("0 basica", "0 -x", "0", "0 extra", "0 a b", "0", "0 base",
+                                   "0 " + "a" * 64, "0", "1")),
+    (6, ["--prefijo", "demo", "--menu"], {},
+     'programa --prefijo demo server1 >/dev/null 2>&1; '
+     + respuestas("0 listar", "0 m:demo-server1", "0", "1", "0 extra", "0 web", "0", "0 noble",
+                  '0 "no-virt-viewer"', "0", "1")),
+    (6, ["--menu"], {}, respuestas("0 listar", "0", "0 eliminar", "0 visto", "1")),
+    (6, ["--menu", "--si"], {}, respuestas("0 todo", "0", "1")),
+    (6, ["--menu", "--si"], {}, CREAR_SERVER1 + '; touch "$SILO/suelto.qcow2"; '
+                                + respuestas("0 todo", "0", "1")),
+    (6, ["--menu"], {}, respuestas("0 base", "0 mibase", "0 ubuntu-base", "0", "0", "1")),
+    (6, ["--menu"], {}, respuestas("0 base", "0 ", "0 base", "0 gb", "1", "0 base", "0 gb",
+                                   "0 noble", "1", "1", "1")),
+    (6, ["--menu"], {}, CREAR_SERVER1 + '; programa server2 >/dev/null 2>&1; '
+                        + respuestas("0 eliminar", "0", "0 eliminar", '0 "server1" "server2"', "1",
+                                     "1")),
+    (6, ["--menu"], {}, respuestas("0 basica", "0 server1", "0 192.168.7.300", "0 noble", "0", "0",
+                                   "1")),
+    (6, ["--menu"], {}, respuestas("0 basica", "1", "0 extra", "0 s1", "1", "0 extra", "0 s1", "0 ",
+                                   "1", "0 extra", "0 s1", "0 ", "0 noble", "1", "1")),
+    (6, ["--menu"], {}, DHCP_10_13 + '; ' + respuestas("0 extra", "0 s1", "1", "1")),
+    (6, ["--menu"], {}, 'quitar_red "${USUARIO}-red"; ' + respuestas("0 extra", "0 s1", "1", "1")),
+    # Sin whiptail, error 38
+    (6, ["--menu"], {}, 'bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"; for p in virsh virt-install '
+                        'wget; do ln -s "$MOCKS_DIR/$p" "$bin/$p"; done; '
+                        'export PATH="$bin:${PATH#"$MOCKS_DIR:"}"'),
+    # La lista vuelve a leer las imágenes base (ci-provision.sh las leía una vez
+    # por sesión del asistente)
+    (6, ["--menu", "--si"], {}, CREAR_SERVER1 + '; '
+                                + respuestas("0 listar", "1", "0 base", "0 gb", "0 noble", "1", "0",
+                                             "0 listar", "0 d:$SILO/gb.qcow2", "0", "1", "1"),
+     {"conocida": LISTA_DEL_ASISTENTE}),
 ]
 
 
@@ -531,6 +602,9 @@ def estado(directorio, con_registro=True):
 def normalizar(texto, orden):
     texto = texto.replace(orden, "ORDEN")
     texto = re.sub(r"^(ci-provision\.sh|ssoo-us) [0-9][^\s]*$", "VERSION", texto, flags=re.M)
+    # El título de los diálogos del asistente (en el registro de los mocks)
+    texto = re.sub(r"^whiptail --title (ci-provision|ssoo-us) \S+", "whiptail --title TITULO",
+                   texto, flags=re.M)
     texto = re.sub(r"(instance-id: \S*)-[0-9]{14}$", r"\1-FECHA", texto, flags=re.M)
     texto = re.sub(r"\.descargando\.[0-9]+", ".descargando.PID", texto)
     # Lo que escribe bash (no el script) cuando una señal mata a un hijo suyo

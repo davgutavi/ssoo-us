@@ -5,12 +5,12 @@ asignatura, no necesitas nada de esto: lee el [README](README.md).
 
 `ssoo-us` sustituirá a `ci-provision.sh` (subcomando `provision`) y a
 `ci-diagnosis` (subcomando `diagnosis`), con la misma interfaz, los mismos
-mensajes y los mismos códigos de salida que cada uno. Mientras se porta, lo que
-falta responde «todavía no está implementado» con el código 69, que no usa
-ninguna de las dos herramientas: `diagnosis` entero y, en `provision`, el
-asistente `--menu` (fase 6 del port). Ya están las validaciones, `--dry-run`,
-la creación de una máquina suelta, GlusterFS, `--listar`, `--eliminar` y
-`--eliminar-todo` (fases 1 a 5).
+mensajes y los mismos códigos de salida que cada uno. `provision` está
+completo (fases 1 a 6 del port: validaciones, `--dry-run`, máquina suelta,
+GlusterFS, `--listar`, `--eliminar`, `--eliminar-todo` y el asistente
+`--menu`); falta probarlo en los servidores (fase 7). `diagnosis` responde
+«todavía no está implementado» con el código 69, que no usa ninguna de las dos
+herramientas.
 
 ## Estructura
 
@@ -35,6 +35,7 @@ src/maquina.py    provision: orden de virt-install, plan, creación y resumen de
 src/cluster.py    provision: base GlusterFS (--glusterfs y fase 1 del clúster)
                   y --gluster-cluster
 src/gestion.py    provision: --listar, --eliminar y --eliminar-todo
+src/asistente.py  provision: el asistente con menús de whiptail (--menu)
 src/provision.py  provision: configuración, opciones, validaciones (también las
                   del entorno: libvirt, silo, red, IPs), flujo y marcha atrás
 src/main.py       Despachador de subcomandos, --version y -h
@@ -123,6 +124,10 @@ cuál. Las sustituciones son:
 - El asistente (`--menu`) muestra la orden que lanza: `ci-provision.sh` escribe
   su `$0`; `ssoo-us provision` escribirá `ssoo-us provision`, que en los tests es
   `$ORDEN`.
+- El test de la auditoría 5 y 6 anotaba los argumentos del proceso hijo del
+  asistente con un `bash` falso en el `PATH`; `ssoo-us` lanza el hijo con su
+  mismo intérprete de Python, así que los anota un `sitecustomize.py` (en
+  `PYTHONPATH`).
 - `--version` escribe `ssoo-us X.Y.Z` en vez de `ci-provision.sh X.Y.Z`.
 - Dos tests se conservan con `skip` (para que la numeración y los nombres sigan
   siendo los de `ci-provision`): el que comprueba que `ci-provision.sh` está al
@@ -147,8 +152,7 @@ Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy pasan los de las fases 1 a 5 y fallan los demás (por «todavía no está
-implementado»). Para comprobar el propio arnés se puede lanzar contra
+Hoy pasan todos (151, y los 2 omitidos). Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
 menos los seis que dependen de las sustituciones de `$ORDEN` y de `--version`.
@@ -185,11 +189,23 @@ añaden sus casos.
 
 ### Diferencias deliberadas con `ci-provision`
 
-Ninguna en la salida de los casos de la herramienta. La referencia es
-`ci-provision` 3.0.2, que corrigió el resumen de `--gluster-cluster --base
-IMAGEN` (la 3.0.1 escribía «(nodosIMAGEN)» y «--eliminar … server4IMAGEN»).
-Si vuelve a hacer falta una, el caso lleva la opción `conocida` con el motivo:
-se muestra con «≈» y no cuenta como fallo.
+La referencia es `ci-provision` 3.0.2, que corrigió el resumen de
+`--gluster-cluster --base IMAGEN` (la 3.0.1 escribía «(nodosIMAGEN)» y
+«--eliminar … server4IMAGEN»). En la herramienta, un caso con una diferencia
+deliberada lleva la opción `conocida` con el motivo: se muestra con «≈» y no
+cuenta como fallo. Son estas:
+
+- **La lista del asistente vuelve a leer las imágenes base cada vez.**
+  `ci-provision.sh` las lee una vez por sesión del asistente: tras crear o
+  eliminar algo desde él, «Mostrar mis máquinas virtuales» describía lo nuevo
+  con lo de antes (p. ej. una base recién hecha como «disco suelto»).
+- **Ctrl+C en lo que lanza el asistente.** `ci-provision.sh` ignora SIGINT
+  (`trap '' INT`) mientras trabaja el proceso hijo, y el hijo hereda la señal
+  ignorada: un `bash` no puede atrapar una señal que ya venía ignorada, así que
+  Ctrl+C no paraba (ni deshacía) nada de lo lanzado desde el menú. `ssoo-us`
+  pone en el padre un manejador que no hace nada, que el hijo no hereda. La
+  herramienta no lo prueba (necesitaría una terminal); lo fija un test
+  unitario (`TestLanzar`).
 
 ## Lo que conviene saber antes de tocar el código
 
@@ -220,8 +236,7 @@ se muestra con «≈» y no cuenta como fallo.
   salvo que la creación ya esté completa.
 - **Lo que aún no está portado** lanza `NoImplementado`, que `provision()`
   convierte en el aviso y el código 69. Así una fase se puede cerrar sin dejar
-  a medias lo que viene detrás (por ejemplo, con `--limpiar` sin `--dry-run`
-  no se borra nada hasta la fase 3).
+  a medias lo que viene detrás. En `provision` ya no queda nada.
 - **Orden de recorrido:** bash recorre sus tablas asociativas en el orden de su
   hash; aquí se recorren ordenadas. Solo se nota en el orden de varios motivos
   de «es la imagen base de…» en un mismo mensaje (`filtrar_borrables`).

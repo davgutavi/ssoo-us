@@ -13,7 +13,7 @@ import sys
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDEN = ["base", "red", "claves", "imagenes", "cloudinit", "virsh", "limpieza", "espera",
-         "maquina", "cluster", "gestion", "provision", "main"]
+         "maquina", "cluster", "gestion", "asistente", "provision", "main"]
 # El python3 del sistema, que es el que tiene PyYAML y el módulo libvirt
 CABECERA = "#!/usr/bin/python3\n"
 

@@ -955,7 +955,7 @@ def ejecutar_provision(o, argv):
     calcular_derivados(o)
     validar_entorno(o)
     if o.menu:
-        raise NoImplementado("--menu")   # fase 6
+        asistente(o)
     elif o.listar:
         listar_maquinas(o)
     elif o.eliminar:

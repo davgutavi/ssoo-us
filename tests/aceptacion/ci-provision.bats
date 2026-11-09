@@ -1572,12 +1572,13 @@ qinfo() {
 @test "auditoría 5 y 6: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes" {
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "0 basica" "0 web" "0 " "0 noble" "0 \"ssh-pass\"" "0 Secreta1" "0" "1" > "$MOCK_WHIPTAIL"
-    # Un 'bash' que anota sus argumentos: así se ve qué recibe el proceso hijo
+    # Un sitecustomize que anota los argumentos de cada python: así se ve qué
+    # recibe el proceso hijo (ssoo-us lo lanza con su mismo intérprete, no con
+    # el bash del PATH)
     local bin="$BATS_TEST_TMPDIR/bin"
     mkdir -p "$bin"
-    printf '#!%s\necho "$*" >> "%s/argv"\nexec %q "$@"\n' "$BASH" "$MOCK_STATE" "$BASH" > "$bin/bash"
-    chmod +x "$bin/bash"
-    PATH="$bin:$PATH" run bash "$SCRIPT" --menu --dry-run </dev/null
+    printf 'import sys\nwith open("%s/argv", "a") as f:\n    f.write(" ".join(sys.argv) + "\\n")\n' "$MOCK_STATE" > "$bin/sitecustomize.py"
+    PYTHONPATH="$bin" run bash "$SCRIPT" --menu --dry-run </dev/null
     assert_success
     assert_output --partial "→ $ORDEN --dry-run --ssh-pass •••••• web"
     assert_output --partial "MODO SIMULACIÓN"
