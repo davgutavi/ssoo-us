@@ -9,6 +9,8 @@ https://github.com/davgutavi/ssoo-us
 Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 """
 
+import glob
+import json
 import os
 import pwd
 import re
@@ -16,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import termios
+import time
+import xml.etree.ElementTree as ET
 
 VERSION = "0.1.0-dev"
 PROGRAMA = "ssoo-us"
@@ -64,6 +68,190 @@ def ejecutar(argv, timeout=None, entrada=None, entorno=None):
         return None, "", ""
     return (p.returncode, p.stdout.decode("utf-8", "replace"),
             p.stderr.decode("utf-8", "replace"))
+
+
+def leer_bytes(ruta):
+    """Contenido de un archivo, o None si no existe o no se puede leer."""
+    try:
+        with open(ruta, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+# --- Red virtual: XML de libvirt y aritmética de IPv4 ------------------------------
+#
+# Lo comparten provision (que lee el XML con «virsh net-dumpxml») y, cuando se
+# porte, diagnosis (que lo lee con la binding de libvirt). Aquí solo se analiza:
+# los mensajes de error son de quien llama.
+
+# Bits de cada octeto de una máscara (mask_to_prefix de ci-provision: suma los
+# bits de cada octeto, sin exigir que sean contiguos)
+BITS_DE_OCTETO = {"255": 8, "254": 7, "252": 6, "248": 5, "240": 4, "224": 3,
+                  "192": 2, "128": 1, "0": 0}
+IPV4_RE = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}")
+
+
+def ipv4_valida(ip):
+    """Cuatro números de 0 a 255 (con ceros a la izquierda si se quiere)."""
+    return (IPV4_RE.fullmatch(ip) is not None
+            and all(int(o, 10) <= 255 for o in ip.split(".")))
+
+
+def ip_a_entero(ip):
+    a, b, c, d = (int(o, 10) for o in ip.split("."))
+    return (a << 24) + (b << 16) + (c << 8) + d
+
+
+def entero_a_ip(n):
+    return "%d.%d.%d.%d" % ((n >> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255)
+
+
+def mascara_a_prefijo(mascara):
+    """255.255.255.0 → 24; None si algún octeto no es de máscara."""
+    bits = 0
+    for octeto in mascara.split("."):
+        if octeto not in BITS_DE_OCTETO:
+            return None
+        bits += BITS_DE_OCTETO[octeto]
+    return bits
+
+
+def prefijo_por_clase(pasarela):
+    """Sin máscara ni prefijo, libvirt aplica la máscara de la clase. Como en
+    ci-provision, por el texto del primer octeto («010» no es de la clase A)."""
+    primero = pasarela.split(".")[0]
+    if re.fullmatch(r"[0-9]|[1-9][0-9]|1[01][0-9]|12[0-7]", primero):
+        return 8
+    if re.fullmatch(r"1[2-8][0-9]|19[01]", primero):
+        return 16
+    return 24
+
+
+def analizar_xml_red(xml):
+    """El primer bloque <ip> de IPv4 de la definición de una red de libvirt
+    (los de IPv6 se descartan: sus rangos no son direcciones IPv4).
+
+    Devuelve None si no hay ninguno, o un diccionario con los atributos tal
+    cual vienen («address», «netmask», «prefix»; cadena vacía si faltan), los
+    rangos DHCP («rangos», [(inicio, fin)]) y las IPs de las reservas por MAC
+    («reservas»), sin validar."""
+    try:
+        raiz = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+    for ip in raiz.findall("ip"):
+        # Como ci-provision: un <ip> sin atributos no cuenta
+        if ip.get("family") == "ipv6" or not ip.attrib:
+            continue
+        datos = {"address": ip.get("address", ""), "netmask": ip.get("netmask", ""),
+                 "prefix": ip.get("prefix", ""), "rangos": [], "reservas": []}
+        for dhcp in ip.findall("dhcp"):
+            for r in dhcp.findall("range"):
+                datos["rangos"].append((r.get("start", ""), r.get("end", "")))
+            for h in dhcp.findall("host"):
+                if h.get("ip") is not None:
+                    datos["reservas"].append(h.get("ip"))
+        return datos
+    return None
+
+
+class RedIPv4:
+    """Una red virtual ya leída: pasarela, prefijo, rangos DHCP y reservas
+    (todo IPv4 válido)."""
+
+    def __init__(self, nombre, pasarela, prefijo, rangos=(), reservas=()):
+        self.nombre = nombre
+        self.pasarela = pasarela
+        self.prefijo = prefijo
+        self.rangos = list(rangos)       # [(inicio, fin)]
+        self.reservas = list(reservas)   # [ip]
+
+    @property
+    def mascara_entera(self):
+        return 0xFFFFFFFF ^ ((1 << (32 - self.prefijo)) - 1)
+
+    @property
+    def red_entera(self):
+        return ip_a_entero(self.pasarela) & self.mascara_entera
+
+    @property
+    def difusion_entera(self):
+        return self.red_entera | (~self.mascara_entera & 0xFFFFFFFF)
+
+    def bloques_libres(self):
+        """Hasta 3 bloques de IPs libres para asignación fija, como líneas
+        «  A - B», o «  (ninguna)»."""
+        ocupados = [(ip_a_entero(self.pasarela),) * 2]
+        ocupados += [(ip_a_entero(a), ip_a_entero(b)) for a, b in self.rangos]
+        ocupados += [(ip_a_entero(r),) * 2 for r in self.reservas]
+        lineas = []
+        actual = self.red_entera + 1
+        for inicio, fin in sorted(ocupados):
+            if len(lineas) >= 3:
+                return lineas
+            if inicio > actual:
+                lineas.append("  %s - %s" % (entero_a_ip(actual), entero_a_ip(inicio - 1)))
+            if fin >= actual:
+                actual = fin + 1
+        if len(lineas) < 3 and actual <= self.difusion_entera - 1:
+            lineas.append("  %s - %s" % (entero_a_ip(actual), entero_a_ip(self.difusion_entera - 1)))
+        return lineas or ["  (ninguna)"]
+
+    def asignable(self, ip_entera):
+        """¿Se puede asignar esta IP de forma fija? Dentro de la red, sin ser la
+        de red, la de difusión ni la pasarela, y fuera del DHCP y las reservas."""
+        if ip_entera & self.mascara_entera != self.red_entera:
+            return False
+        if ip_entera in (self.red_entera, self.difusion_entera, ip_a_entero(self.pasarela)):
+            return False
+        if any(ip_a_entero(a) <= ip_entera <= ip_a_entero(b) for a, b in self.rangos):
+            return False
+        return all(ip_entera != ip_a_entero(r) for r in self.reservas)
+
+    def primer_hueco(self, cuantas):
+        """Primer número N (de 2 a 250) con N, N+1... libres para «cuantas» IPs."""
+        for n in range(2, 251):
+            if all(self.asignable(self.red_entera + n + k) for k in range(cuantas)):
+                return n
+        return None
+
+
+# --- Clave pública del alumno ------------------------------------------------------
+
+# Espacios de [[:space:]] con LC_ALL=C (str.strip() quitaría además los de Unicode)
+ESPACIOS_C = " \t\n\v\f\r"
+TIPO_CLAVE_RE = re.compile(r"(ssh-(rsa|ed25519|dss)|ecdsa-sha2-nistp[0-9]+"
+                           r"|sk-(ssh-ed25519|ecdsa-sha2-nistp256))(@openssh\.com)? ")
+
+
+def lineas_con_texto(texto):
+    """Las líneas con algo que no sea espacio (grep '[^[:space:]]')."""
+    return [l for l in texto.split("\n") if l.strip(ESPACIOS_C)]
+
+
+def comprobar_clave_publica(o):
+    """La clave pública existe y tiene una sola clave: va tal cual dentro del
+    user-data, y una segunda línea (o un fichero vacío) lo dejaría inválido.
+    Deja en o.pubkey la línea, sin los espacios del final."""
+    ruta = o.pubkey_path
+    if not os.path.isfile(ruta):
+        fallar(31, "No existe la clave pública en %s. Genera una con: ssh-keygen" % ruta)
+    datos = leer_bytes(ruta) or b""
+    lineas = lineas_con_texto(datos.decode("utf-8", "surrogateescape"))
+    o.pubkey = lineas[0].rstrip(ESPACIOS_C) if lineas else ""
+    if not lineas:
+        fallar(31, "El fichero %s está vacío. Genera una pareja de claves nueva con: ssh-keygen"
+               % ruta)
+    if len(lineas) > 1:
+        fallar(31, "El fichero %s tiene %d líneas y debe contener una sola clave pública.\n"
+                   "Deja solo la tuya (una línea que empiece por ssh-rsa, ssh-ed25519 o "
+                   "ecdsa-sha2-…)." % (ruta, len(lineas)))
+    if TIPO_CLAVE_RE.match(o.pubkey) is None:
+        fallar(31, "El fichero %s no contiene una clave pública: debe ser una línea que empiece\n"
+                   "por ssh-rsa, ssh-ed25519 o ecdsa-sha2-… (¿has copiado ahí la clave privada u "
+                   "otro fichero?).\n"
+                   "Si no la tienes, genera una pareja de claves nueva con: ssh-keygen" % ruta)
 
 
 # --- Imágenes de partida (--imagen) ------------------------------------------
@@ -140,6 +328,927 @@ def elegir_imagen(o):
     o.os_variant = variante_de_imagen(o.imagen)
 
 
+# --- qemu-img ------------------------------------------------------------------
+
+def qemu_info(ruta, forzar=True, cadena=False):
+    """«qemu-img info --output=json» ya leído (un diccionario o, con cadena, una
+    lista), o None si falla. forzar: con -U (force-share), para poder leer la
+    imagen aunque una máquina en ejecución la tenga abierta."""
+    orden = ["qemu-img", "info"] + (["-U"] if forzar else [])
+    orden += (["--backing-chain"] if cadena else []) + ["--output=json", ruta]
+    codigo, salida, _ = ejecutar(orden)
+    if codigo != 0:
+        return None
+    try:
+        return json.loads(salida)
+    except ValueError:
+        return None
+
+
+def campo_json(datos, campo):
+    """jq -r '.CAMPO // empty': el valor como texto, o "" si falta, es null o false."""
+    if not isinstance(datos, dict):
+        return ""
+    valor = datos.get(campo)
+    if valor is None or valor is False:
+        return ""
+    return str(valor)
+
+
+def tam_a_bytes(tam):
+    """40G, 512M o 1T → bytes."""
+    return int(tam[:-1], 10) * {"M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}[tam[-1]]
+
+
+def bytes_a_gib(n):
+    """Bytes → GiB, redondeando hacia arriba."""
+    return (n + 1073741823) // 1073741824
+
+
+def tam_virtual(ruta):
+    """Tamaño virtual de una imagen en bytes (como texto), o "" si no se puede leer."""
+    return campo_json(qemu_info(ruta), "virtual-size")
+
+
+def formato_de(ruta, forzar=True):
+    return campo_json(qemu_info(ruta, forzar), "format")
+
+
+def leer_respaldo(ruta):
+    """Imagen base de un fichero (ruta completa), o "". Las rutas relativas son
+    relativas al directorio del propio fichero, como las interpreta qemu."""
+    b = campo_json(qemu_info(ruta), "backing-filename")
+    if b and not b.startswith("/"):
+        b = os.path.dirname(ruta) + "/" + b
+    return b
+
+
+# --- La imagen de partida en el silo -----------------------------------------------
+
+def imagen_protegida(o, ruta):
+    """¿Es una de las imágenes cloud que descarga el script? Nunca se borran."""
+    return ruta in (o.silo + "/" + IMAGEN_NOBLE, o.silo + "/" + IMAGEN_DEBIAN)
+
+
+def imagen_compartida(o):
+    """Copia de la imagen cloud en el directorio compartido de los profesores, si
+    la han dejado allí (evita que cada alumno descargue cientos de MB), o ""."""
+    ruta = o.dir_compartido + "/" + os.path.basename(o.base_img)
+    return ruta if os.access(ruta, os.R_OK) else ""
+
+
+def origen_disco_principal(o, imagen):
+    """Cómo se hace el disco principal a partir de una imagen, para los mensajes."""
+    if os.path.dirname(imagen) == o.silo:
+        return "copia COW de %s" % os.path.basename(imagen)
+    return "copia completa de %s" % imagen
+
+
+def discos_extra(o, host, unidades):
+    """Rutas de los discos extra de una máquina."""
+    return ["%s/%s%s-%s.qcow2" % (o.silo, o.prefijo_fichero, host, u) for u in unidades]
+
+
+def deducir_imagen_de_base(o):
+    """Con --base: comprueba que la cadena de respaldo está completa y, si no se
+    ha dicho con --imagen, deduce de qué imagen sale el fichero por el nombre de
+    la última de la cadena:
+      *debian*                     Debian 12
+      noble*, *cloudimg*           Ubuntu 24.04 (imagen cloud)
+      *ubuntu-base*, *gluster*     ubuntu-base (la base GlusterFS del boletín es
+                                   una copia completa suya)
+    Si no se reconoce, se trata como imagen cloud de Ubuntu y se avisa: así
+    'administrador' siempre tiene sudo."""
+    cadena = qemu_info(o.base_img, cadena=True)
+    if cadena is None:
+        fallar(39, "No se puede leer la imagen %s ni la cadena de imágenes de la que es copia.\n"
+                   "Lo más probable es que falte (o se haya movido) la imagen de la que se hizo "
+                   "la copia; compruébalo con:\n"
+                   "  qemu-img info --backing-chain %s" % (o.base_img, o.base_img))
+    if o.imagen_opt:
+        return
+    ultima = cadena[-1] if isinstance(cadena, list) and cadena else cadena
+    raiz = os.path.basename(campo_json(ultima, "filename") or o.base_img)
+    # ${raiz,,} con LC_ALL=C: solo las letras ASCII
+    nombre = "".join(c.lower() if "A" <= c <= "Z" else c for c in raiz)
+    if "debian" in nombre:
+        o.imagen = "debian12"
+    elif nombre.startswith("noble") or "cloudimg" in nombre:
+        o.imagen = "noble"
+    elif "ubuntu-base" in nombre or "gluster" in nombre:
+        o.imagen = "ubuntu-base"
+    else:
+        o.imagen = "noble"
+        base = os.path.basename(o.base_img)
+        print("AVISO: no sé de qué imagen sale %s (no es copia de ninguna imagen conocida)." % base,
+              file=sys.stderr)
+        print("       Se trata como imagen cloud de Ubuntu 24.04 ('administrador' con sudo sin "
+              "contraseña).", file=sys.stderr)
+        print("       Si sale de ubuntu-base o de Debian, indícalo: --imagen ubuntu-base, o "
+              "--imagen debian12.", file=sys.stderr)
+    o.os_variant = variante_de_imagen(o.imagen)
+
+
+def comprobar_base_no_objetivo(o):
+    """La imagen de partida no puede ser uno de los discos que se van a crear
+    (con --limpiar se borraría antes de usarla)."""
+    for f in o.obj_ficheros:
+        if f == o.base_img:
+            if o.base_opt:
+                fallar(10, "La imagen indicada con --base (%s) es uno de los discos que se "
+                           "crearían.\nElige otra imagen o cambia el nombre de la máquina."
+                       % os.path.basename(o.base_img))
+            fallar(10, "El disco que se crearía se llama %s, que es la imagen de la que\n"
+                       "salen todas las máquinas. Ponle otro nombre a la máquina (p.ej. server1)."
+                   % os.path.basename(o.base_img))
+        if imagen_protegida(o, f):
+            fallar(10, "El disco que se crearía se llama %s, que es una de las imágenes cloud de\n"
+                       "las que salen las máquinas. Ponle otro nombre a la máquina (p.ej. "
+                       "server1)." % os.path.basename(f))
+
+
+def comprobar_tam_disco(o):
+    """--tam no puede ser menor que la imagen de la que se hace la copia: qemu-img
+    lo admite, pero la máquina arrancaría con el sistema de ficheros truncado."""
+    if not os.path.isfile(o.base_img):
+        return
+    vs = tam_virtual(o.base_img)
+    if re.fullmatch(r"[0-9]+", vs) is None:
+        return
+    vs = int(vs)
+    if tam_a_bytes(o.tam_disco) < vs:
+        # Sin --tam, el disco toma el tamaño de la imagen (ubuntu-base tiene 64G)
+        if not o.tam_explicito:
+            o.tam_disco = "%dG" % bytes_a_gib(vs)
+            return
+        fallar(15, "El tamaño --tam %s es menor que el de la imagen %s (%d GiB):\n"
+                   "la copia quedaría truncada y la máquina no arrancaría bien. Indica un tamaño "
+                   "igual o mayor." % (o.tam_disco, os.path.basename(o.base_img), bytes_a_gib(vs)))
+
+
+def comprobar_imagen_base(o):
+    """La imagen de partida: con --base, que exista y sirva; ubuntu-base, que
+    esté; las imágenes cloud, que estén (si no, se descargan) y sean qcow2."""
+    if o.base_opt:
+        if not os.path.isfile(o.base_img):
+            fallar(39, "La imagen indicada con --base no está en el silo: %s\n"
+                       "Mira qué imágenes tienes con: ls %s/*.qcow2" % (o.base_img, o.silo))
+        formato = formato_de(o.base_img)
+        if formato != "qcow2":
+            fallar(39, "La imagen indicada con --base no es un qcow2 válido: %s (formato: %s).\n"
+                       "Mira qué imágenes tienes con: ls %s/*.qcow2"
+                   % (o.base_img, formato or "desconocido", o.silo))
+        # Una imagen base no puede ser el disco de ninguna máquina, ni siquiera
+        # apagada: en cuanto arrancara, escribiría en ella y las copias que
+        # dependen de ella quedarían corruptas
+        cargar_dominios_vecinos(o)
+        otro = o.disco_usado_por.get(o.base_img)
+        if otro:
+            fallar(39, "La imagen %s es el disco de la máquina '%s' (aunque esté apagada).\n"
+                       "Si la usas como imagen base, al arrancar '%s' las copias se "
+                       "corromperían.\n"
+                       "Elimina antes esa máquina, o haz una copia completa del disco y usa la "
+                       "copia:\n  cp %s %s/mi-base.qcow2" % (o.base_img, otro, otro, o.base_img,
+                                                            o.silo))
+        # Sin -U, qemu-img se niega si otro proceso (p.ej. una máquina de otro
+        # usuario) tiene la imagen abierta para escribir
+        if qemu_info(o.base_img, forzar=False) is None:
+            _, salida, errores = ejecutar(["qemu-img", "info", o.base_img])
+            if "lock" in (salida + errores).lower():
+                fallar(39, "La imagen %s la tiene abierta para escribir una máquina en "
+                           "ejecución.\nApágala (o elimina su dominio) antes de usarla como "
+                           "imagen base: las copias de un disco\nque se está escribiendo "
+                           "quedarían corruptas." % o.base_img)
+        deducir_imagen_de_base(o)
+        return
+
+    # ubuntu-base: la dejan los profesores en el servidor; no se descarga
+    if o.imagen == "ubuntu-base":
+        if not os.access(o.base_img, os.R_OK) or formato_de(o.base_img) != "qcow2":
+            fallar(39, "No encuentro la imagen ubuntu-base del boletín 1 en %s\n"
+                       "(o no se puede leer, o no es un qcow2). En los servidores de la "
+                       "asignatura está ahí.\n"
+                       "Si no la tienes, construye la base a partir de una imagen cloud: "
+                       "--imagen noble" % o.base_img)
+        return
+
+    if not os.path.isfile(o.base_img):
+        if o.dry_run:
+            # Se avisa dentro del plan, no aquí, para que salga en orden
+            o.base_img_falta = True
+            return
+        raise NoImplementado("descarga de la imagen base")   # fase 3
+
+    formato = formato_de(o.base_img)
+    if formato != "qcow2":
+        fallar(37, "La imagen base '%s' no es un qcow2 válido (formato: %s).\n"
+                   "Probablemente la descarga falló. Bórrala y vuelve a ejecutar el script, que "
+                   "la descargará:\n  rm %s" % (o.base_img, formato or "desconocido", o.base_img))
+
+
+# --- provision: ficheros de cloud-init ---------------------------------------------
+#
+#   generar_cloudinit(o, DOMINIO, HOSTNAME, IP, MODO)
+#
+#   MODO:
+#     normal   máquina corriente
+#     gluster  nodo GlusterFS suelto, o base del clúster: instala
+#              glusterfs-server y xfsprogs, habilita glusterd y resetea el
+#              machine-id para que las copias sean máquinas distintas
+#     nodo     nodo del clúster, creado a partir de la base: ya tiene todo
+#              instalado; solo se personaliza (IP, /etc/hosts, discos xfs)
+#
+# Deja las rutas en o.workdir, o.user_data, o.meta_data y o.network_data (""
+# si DHCP).
+#
+# Solo se usan claves vigentes en el cloud-init de Ubuntu 24.04: con una
+# obsoleta (p.ej. 'chpasswd: list:' o 'ssh-authorized-keys') termina en
+# 'degraded done', que el script trata como error.
+
+DNS_DE_LA_US = ("150.214.186.69", "150.214.130.15")
+INTERFAZ_VM = "enp1s0"
+
+
+def yaml_comillas(texto):
+    """Escalar YAML entre comillas simples (dentro, la comilla se duplica): así
+    una contraseña con ':', '#' o espacios no rompe el user-data."""
+    return "'%s'" % texto.replace("'", "''")
+
+
+def escribir_privado(ruta, texto):
+    """Un fichero que solo puede leer su dueño desde el primer instante (en el
+    servidor, multiusuario, estos ficheros llevan contraseñas)."""
+    fd = os.open(ruta, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(texto.encode("utf-8", "surrogateescape"))
+    os.chmod(ruta, 0o600)
+
+
+def borrar_ruta(ruta):
+    """rm -rf RUTA (un enlace simbólico se borra él, no lo que señala)."""
+    if os.path.islink(ruta) or os.path.isfile(ruta):
+        os.remove(ruta)
+    elif os.path.isdir(ruta):
+        shutil.rmtree(ruta)
+
+
+def preparar_workdir(o, dominio):
+    """Directorio de los ficheros. En --dry-run es otro, para no sobrescribir los
+    de una máquina que ya exista."""
+    if o.dry_run:
+        o.workdir = "%s/cloudinit-%s.dry-run" % (o.silo, dominio)
+    else:
+        o.workdir = "%s/cloudinit-%s" % (o.silo, dominio)
+        # Si algo falla después, el rollback lo quita junto a los discos
+        o.dirs_creados.append(o.workdir)
+    # Solo su propietario debe poder leerlos, ni siquiera un instante: por eso
+    # el umask, y no un chmod después
+    borrar_ruta(o.workdir)
+    antes = os.umask(0o077)
+    try:
+        os.makedirs(o.workdir, exist_ok=True)
+    finally:
+        os.umask(antes)
+    os.chmod(o.workdir, 0o700)
+    o.user_data = o.workdir + "/cip-user.yaml"
+    o.meta_data = o.workdir + "/cip-meta.yaml"
+    o.network_data = ""
+
+
+def generar_cloudinit(o, dominio, host, ip, modo):
+    preparar_workdir(o, dominio)
+    # El instance-id importa: cloud-init vuelve a configurar una máquina cuando
+    # ve uno distinto del que tenía. Así se personalizan los nodos del clúster,
+    # que parten de un disco ya configurado. Lleva la fecha para que sea nuevo
+    # aunque el disco de partida ya hubiera sido una máquina con el mismo nombre.
+    escribir_privado(o.meta_data, "instance-id: %s-%s\nlocal-hostname: %s\n"
+                     % (dominio, time.strftime("%Y%m%d%H%M%S"), host))
+    lineas = ["#cloud-config"] + yaml_usuarios(o) + yaml_paquetes_y_ficheros(o, modo, host) \
+        + yaml_runcmd(o, modo)
+    escribir_privado(o.user_data, "".join(l + "\n" for l in lineas))
+    if ip:
+        o.network_data = o.workdir + "/cip-net.yaml"
+        escribir_privado(o.network_data, texto_network_config(o, ip))
+
+
+def yaml_usuarios(o):
+    """Usuarios, contraseñas y acceso por SSH."""
+    l = ["users:", "  - name: administrador"]
+    if o.imagen == "ubuntu-base":
+        # En ubuntu-base 'administrador' ya existe, con la contraseña del
+        # boletín 1, y sudo se la pide: se deja como está (lock_passwd: false
+        # para que cloud-init no la bloquee) y solo se añade la clave
+        l.append("    lock_passwd: false")
+    else:
+        l += ["    groups: [sudo]", "    shell: /bin/bash",
+              "    sudo: ['ALL=(ALL) NOPASSWD:ALL']"]
+    l.append("    ssh_authorized_keys:")
+    # Entre comillas: el comentario de la clave puede llevar ': ' o '#'
+    l.append("      - %s" % yaml_comillas(o.pubkey))
+
+    # root tiene contraseña para poder entrar por consola (por SSH no entra:
+    # el sshd de Debian y el de Ubuntu traen PermitRootLogin prohibit-password).
+    # Hace falta, p.ej., en el modo de emergencia del epígrafe 2.3 del boletín 2.
+    # 'administrador' solo la tiene si se pide --ssh-pass; si no, entra
+    # únicamente por SSH con su clave, igual que en las máquinas que se crean a
+    # mano siguiendo el boletín.
+    if o.ssh_pass or not o.no_root:
+        l += ["chpasswd:", "  expire: false", "  users:"]
+        if o.ssh_pass:
+            l += ["    - name: administrador",
+                  "      password: %s" % yaml_comillas(o.ssh_pass),
+                  "      type: text"]
+        if not o.no_root:
+            l += ["    - name: root", "      password: %s" % PASS_CONSOLA, "      type: text"]
+
+    # SSH por contraseña solo si el alumno lo pide explícitamente. Se fija
+    # también el 'false' para no depender del valor por defecto de la imagen,
+    # salvo en ubuntu-base, que lo trae activado y se respeta.
+    if o.ssh_pass:
+        l.append("ssh_pwauth: true")
+    elif o.imagen != "ubuntu-base":
+        l.append("ssh_pwauth: false")
+    return l
+
+
+def yaml_paquetes_y_ficheros(o, modo, host):
+    """Paquetes y, en los nodos, /etc/hosts y discos xfs."""
+    if modo in ("normal", "gluster"):
+        l = ["package_update: true", "packages:", "  - qemu-guest-agent"]
+        if modo == "gluster":
+            l.append("  - glusterfs-server")
+            # Necesario para que los nodos del clúster puedan formatear sus
+            # discos en xfs en el primer arranque
+            l.append("  - xfsprogs")
+        return l
+    if modo != "nodo":
+        return []
+    # La base ya tiene todo instalado: no hace falta tocar apt
+    l = ["package_update: false",
+         # Resolución por nombre entre los nodos (epígrafe 2.4 c). Se fija
+         # manage_etc_hosts a false para que cloud-init no regenere /etc/hosts
+         # en cada arranque y pise lo escrito aquí.
+         "manage_etc_hosts: false", "write_files:", "  - path: /etc/hosts",
+         "    content: |", "      127.0.0.1 localhost", "      127.0.1.1 %s" % host]
+    l += ["      %s %s" % (ip, nodo) for ip, nodo in zip(o.cluster_ips, CLUSTER_NODOS)]
+    l += ["      ::1 localhost ip6-localhost ip6-loopback", "      ff02::1 ip6-allnodes",
+          "      ff02::2 ip6-allrouters"]
+    # Discos vdb, vdc y vdd formateados en xfs. Deben estar conectados desde el
+    # primer arranque: por eso se pasan a virt-install en vez de añadirlos
+    # después. El montaje va en runcmd (ver yaml_runcmd) para que las líneas de
+    # /etc/fstab sean las mismas que escribe crea-entorno.sh; el módulo
+    # 'mounts' de cloud-init las escribiría a su manera.
+    l.append("fs_setup:")
+    for unidad, _ in zip(o.unidades_cluster, CLUSTER_MONTAJES):
+        l += ["  - device: /dev/%s" % unidad, "    filesystem: xfs", "    partition: none",
+              "    overwrite: false"]
+    return l
+
+
+def yaml_runcmd(o, modo):
+    l = ["runcmd:"]
+    if modo == "nodo":
+        l.append("  - mkdir -p %s" % " ".join(CLUSTER_MONTAJES))
+        for unidad, montaje in zip(o.unidades_cluster, CLUSTER_MONTAJES):
+            l.append("  - echo '/dev/%s %s xfs %s 0 0' >> /etc/fstab"
+                     % (unidad, montaje, OPCIONES_FSTAB_CLUSTER))
+        l.append("  - mount -a")
+    if o.imagen == "ubuntu-base" and o.no_root:
+        # ubuntu-base trae root con contraseña: --no-root la bloquea
+        l.append("  - passwd -l root")
+    l.append("  - timedatectl set-timezone Europe/Madrid")
+    if modo == "gluster":
+        # Solo se habilita glusterd, no se arranca: así no genera su UUID en la
+        # base, y cada copia tendrá el suyo cuando arranque
+        l.append("  - systemctl enable glusterd")
+    l.append("  - systemctl start qemu-guest-agent")
+    if modo == "gluster":
+        # machine-id vacío: cada copia de este disco generará el suyo
+        l.append("  - truncate -s 0 /etc/machine-id")
+    return l
+
+
+def texto_network_config(o, ip):
+    """network-config, solo si la IP es fija. La pasarela y el prefijo son los de
+    la red real. Con 'routes:' en lugar de la obsoleta 'gateway4:', como el
+    capítulo 6 del manual."""
+    return ("version: 2\n"
+            "ethernets:\n"
+            "  %s:\n"
+            "    addresses:\n"
+            "      - %s/%d\n"
+            "    routes:\n"
+            "      - to: default\n"
+            "        via: %s\n"
+            "    nameservers:\n"
+            "      addresses:\n"
+            "        - %s\n"
+            "        - %s\n" % ((INTERFAZ_VM, ip, o.red.prefijo, o.red.pasarela) + DNS_DE_LA_US))
+
+
+# --- provision: libvirt por virsh ------------------------------------------------
+#
+# provision habla con libvirt con «virsh», como ci-provision.sh: los tests de
+# aceptación lo simulan (tests/aceptacion/mocks/virsh) y cuentan sus llamadas.
+# Todas pasan por ejecutar(), con LIBVIRT_DEFAULT_URI=qemu:///system.
+
+
+def virsh(*argumentos):
+    """(código, salida, errores) de «virsh ARGUMENTOS»."""
+    return ejecutar(["virsh"] + list(argumentos))
+
+
+def virsh_ok(*argumentos):
+    """¿Ha terminado bien «virsh ARGUMENTOS»?"""
+    return virsh(*argumentos)[0] == 0
+
+
+def virsh_salida(*argumentos):
+    """La salida de «virsh ARGUMENTOS», o cadena vacía si falla («|| true»)."""
+    codigo, salida, _ = virsh(*argumentos)
+    return salida if codigo == 0 else ""
+
+
+def lineas_no_vacias(texto):
+    return [linea for linea in texto.split("\n") if linea]
+
+
+def dominios_del_servidor():
+    """Todos los dominios (virsh list --all --name), en su orden."""
+    return lineas_no_vacias(virsh_salida("list", "--all", "--name"))
+
+
+def fuentes_de_domblklist(salida, admitir_guion=False):
+    """Segunda columna de «virsh domblklist» tras las dos líneas de cabecera.
+    Sin admitir_guion, solo las rutas absolutas (awk '$2 ~ /^\\//'); con él,
+    todo lo que no sea «-» (las unidades sin medio)."""
+    fuentes = []
+    for linea in salida.split("\n")[2:]:
+        campos = linea.split()
+        if len(campos) < 2:
+            continue
+        if admitir_guion and campos[1] != "-":
+            fuentes.append(campos[1])
+        elif not admitir_guion and campos[1].startswith("/"):
+            fuentes.append(campos[1])
+    return fuentes
+
+
+def discos_persistentes(dominio, admitir_guion=False):
+    """Fuentes de los discos de la definición persistente de un dominio."""
+    return fuentes_de_domblklist(virsh_salida("domblklist", dominio, "--inactive"),
+                                 admitir_guion)
+
+
+def red_existe(nombre):
+    return virsh_ok("net-info", nombre)
+
+
+def red_activa(nombre):
+    """awk '/^Active:/ { print $2 }' de «virsh net-info» == yes."""
+    for linea in virsh_salida("net-info", nombre).split("\n"):
+        if linea.startswith("Active:"):
+            campos = linea.split()
+            return len(campos) > 1 and campos[1] == "yes"
+    return False
+
+
+# --- provision: conflictos con lo que ya existe, y --limpiar -----------------------
+#
+# El script siempre crea dominios y discos nuevos. Si alguno de los que va a
+# crear ya existe, se detiene y lo dice; con --limpiar los elimina antes, pero
+# solo exactamente esos: nunca otro dominio ni otro fichero del silo.
+#
+# Aquí están también las comprobaciones que comparten --limpiar, --eliminar y
+# --eliminar-todo para no borrar nunca lo que no se debe:
+#   - un disco que use cualquier máquina del servidor que no se vaya a eliminar;
+#   - una imagen de la que dependa (directa o indirectamente) una copia que se
+#     conserva;
+#   - las imágenes cloud de partida;
+#   - un dominio cuyos discos no están en el silo (no lo ha creado el alumno
+#     con este script, aunque su nombre lo parezca: p.ej. con --prefijo).
+
+
+def cargar_dominios_vecinos(o):
+    """Dominios «vecinos»: TODOS los del servidor que no son objetivo de esta
+    ejecución. Cualquiera de ellos podría estar usando un fichero de este silo.
+    Deja en o.disco_usado_por, para cada fichero, el primer vecino que lo usa."""
+    o.disco_usado_por = {}
+    for d in dominios_del_servidor():
+        if d in o.obj_dominios:
+            continue
+        for f in discos_persistentes(d):
+            o.disco_usado_por.setdefault(f, d)
+
+
+def dominio_en_silo(o, dominio):
+    """¿Es el dominio de este silo? Todos sus discos tienen que estar en el silo
+    (salvo el CD-ROM de cloud-init que deja virt-install), y al menos uno."""
+    n = 0
+    for f in discos_persistentes(dominio, admitir_guion=True):
+        if f.startswith(o.silo + "/"):
+            n += 1
+        elif not f.endswith("cloudinit.iso"):
+            return False
+    return n > 0
+
+
+def ficheros_del_silo(o, *patrones):
+    """Los ficheros del silo que casan con cada patrón, en el orden de bash
+    (cada patrón ordenado por separado)."""
+    ficheros = []
+    for patron in patrones:
+        ficheros += sorted(glob.glob(os.path.join(glob.escape(o.silo), patron)))
+    return [f for f in ficheros if os.path.isfile(f)]
+
+
+def cargar_respaldos(o):
+    """Imagen base de cada qcow2 (y .img) del silo, leída una sola vez: un
+    qemu-img por fichero, y todo lo demás se calcula sobre ese mapa."""
+    if o.respaldos is None:
+        o.respaldos = {}
+        for f in ficheros_del_silo(o, "*.qcow2", "*.img"):
+            o.respaldos[f] = leer_respaldo(f)
+    return o.respaldos
+
+
+def copias_directas(o, ruta):
+    """Copias del silo cuya imagen base es este fichero."""
+    return sorted(c for c, b in cargar_respaldos(o).items() if b == ruta)
+
+
+def filtrar_borrables(o, ficheros):
+    """Decide cuáles de estos ficheros se pueden eliminar. Se conservan:
+      - las imágenes cloud de partida;
+      - los que use una máquina que no se va a eliminar;
+      - aquellos de los que dependa una copia que se conserva, aunque sea a
+        través de otra (si una copia se queda, se queda toda su cadena).
+    Devuelve (borrables, conservados), con «nombre: motivo» en conservados.
+    Antes hay que llamar a cargar_dominios_vecinos.
+
+    El orden de los motivos de «imagen base de» puede no ser el de bash, que
+    recorre sus tablas en el orden de su hash; aquí se recorren ordenadas."""
+    respaldos = cargar_respaldos(o)
+    candidatos, conservados = [], []
+    for f in ficheros:
+        if imagen_protegida(o, f):
+            conservados.append("%s: es una imagen cloud de partida (nunca se borra)"
+                               % os.path.basename(f))
+        elif f in o.disco_usado_por:
+            conservados.append("%s: lo usa la máquina '%s'"
+                               % (os.path.basename(f), o.disco_usado_por[f]))
+        else:
+            candidatos.append(f)
+    # Lo que se conserva por depender de ello una copia que se queda. Se repite
+    # hasta que no cambia nada, para recorrer cadenas de cualquier longitud.
+    cambio = True
+    while cambio:
+        cambio = False
+        for f in sorted(candidatos):
+            for c in sorted(respaldos):
+                if respaldos[c] == f and c not in candidatos:
+                    candidatos.remove(f)
+                    conservados.append("%s: es la imagen base de %s, que se conserva"
+                                       % (os.path.basename(f), os.path.basename(c)))
+                    cambio = True
+                    break
+    return [f for f in ficheros if f in candidatos], conservados
+
+
+def comprobar_conflictos(o, solo_detectar=False):
+    """¿Choca lo que se va a crear (o.obj_dominios, o.obj_ficheros) con lo que
+    ya existe? Sin --limpiar, error 21 con las opciones; con --limpiar, lo
+    enumera y (salvo en --dry-run) lo elimina, previa confirmación. Con
+    solo_detectar (la pasada previa a la descarga), --limpiar solo avisa."""
+    dominios, ficheros = [], []
+    for d in o.obj_dominios:
+        if virsh_ok("dominfo", d):
+            # Un dominio que se llama como los que crea el script pero tiene
+            # sus discos fuera del silo es de otra persona (o hecho a mano):
+            # ni se elimina ni se aconseja eliminarlo
+            if not dominio_en_silo(o, d):
+                fallar(21, "Ya existe una máquina llamada '%s', pero sus discos no están en tu "
+                           "silo:\nno la ha creado este script para ti (puede ser de otro usuario "
+                           "del servidor), así que no se toca.\n"
+                           "Elige otro nombre de máquina, u otro --prefijo." % d)
+            dominios.append(d)
+    ficheros = [f for f in o.obj_ficheros if os.path.exists(f)]
+    if not dominios and not ficheros:
+        return
+
+    # Un fichero que ya existe puede ser el disco de otra máquina (hecha a mano
+    # con otro nombre, o de otro prefijo) o el respaldo de otras copias.
+    # Entonces ni se elimina ni se aconseja eliminarlo.
+    if ficheros:
+        cargar_dominios_vecinos(o)
+        _, conservados = filtrar_borrables(o, ficheros)
+        if conservados:
+            fallar(21, "Algunos de los discos que este script tendría que crear ya existen y no "
+                       "se pueden eliminar:\n" + "".join("  %s\n" % x for x in conservados)
+                   + "Elige otro nombre de máquina (o de disco, con --disco), u otro --prefijo.")
+
+    # En la pasada previa a la descarga solo se avisa; con --limpiar, la
+    # eliminación se hace en la pasada definitiva
+    if solo_detectar and o.limpiar:
+        return
+
+    if not o.limpiar:
+        msg = "Ya existen elementos que este script tendría que crear:"
+        msg += "".join("\n  dominio  %s" % d for d in dominios)
+        msg += "".join("\n  disco    %s" % f for f in ficheros)
+        msg += "\n\nEl script siempre crea máquinas y discos nuevos. Tienes estas opciones:"
+        msg += "\n  a) Eliminarlos tú:"
+        msg += "".join("\n       virsh destroy %s; virsh undefine %s --snapshots-metadata" % (d, d)
+                       for d in dominios)
+        if dominios:
+            msg += ("\n       (si la máquina ya está apagada, 'virsh destroy' dará un error; "
+                    "es normal)")
+        msg += "".join("\n       rm %s" % f for f in ficheros)
+        msg += ("\n  b) Repetir el comando añadiendo --limpiar, que elimina exactamente eso y "
+                "nada más.")
+        if o.cluster and not o.base_opt and disco_base_cluster(o) in ficheros:
+            msg += "\n  c) Reutilizar la imagen base que ya tienes, sin volver a construirla:"
+            msg += "\n       %s %s--gluster-cluster --base %s" % (
+                orden_provision(), prefijo_en_orden(o), os.path.basename(disco_base_cluster(o)))
+            msg += "\n     (añade --limpiar si además existen los nodos)"
+        fallar(21, msg)
+
+    print("--limpiar: se van a eliminar estos elementos (y solo estos):")
+    for d in dominios:
+        print("  dominio  %s" % d)
+    for f in ficheros:
+        print("  disco    %s" % f)
+    if o.dry_run:
+        print("  (--dry-run: no se elimina nada)")
+        print()
+        return
+    raise NoImplementado("--limpiar")   # fase 3: confirmar y eliminar
+
+
+def prefijo_en_orden(o):
+    """«--prefijo PREFIJO » en las órdenes que se sugieren, si se usó."""
+    return "--prefijo %s " % o.prefijo_opt if o.prefijo_opt else ""
+
+
+# --- provision: una máquina suelta ---------------------------------------------------
+
+
+def construir_comando(o, nombre, ram, vcpus, discos):
+    """La orden de virt-install, como lista para poder ejecutarla y mostrarla
+    tal cual. Usa los ficheros cloud-init generados justo antes. Los discos se
+    conectan en el orden dado: el primero es vda."""
+    orden = ["virt-install", "--quiet", "--name", nombre, "--ram", str(ram),
+             "--vcpus", str(vcpus), "--import"]
+    for disco in discos:
+        orden += ["--disk", "path=%s,format=qcow2,bus=virtio" % disco]
+    cloud_init = "user-data=%s,meta-data=%s" % (o.user_data, o.meta_data)
+    if o.network_data:
+        cloud_init += ",network-config=%s" % o.network_data
+    orden += ["--os-variant", o.os_variant, "--network", "network=%s" % o.red.nombre,
+              "--cloud-init", cloud_init,
+              "--graphics", "none" if o.no_graficos else "spice", "--noautoconsole"]
+    o.virt_install_cmd = orden
+
+
+def texto_comando(o):
+    """La orden de virt-install, legible: una opción por línea."""
+    orden = o.virt_install_cmd
+    lineas, i = ["  virt-install \\"], 1
+    while i < len(orden):
+        arg = orden[i]
+        siguiente = orden[i + 1] if i + 1 < len(orden) else ""
+        if arg.startswith("--") and siguiente and not siguiente.startswith("--"):
+            linea, i = "    %s %s" % (arg, siguiente), i + 2
+        else:
+            linea, i = "    %s" % arg, i + 1
+        lineas.append(linea + (" \\" if i < len(orden) else ""))
+    return lineas
+
+
+def calcular_objetivos(o):
+    """Qué va a crear esta ejecución (dominios y ficheros). Se calcula antes de la
+    validación que cuesta tiempo (la descarga de la imagen), para avisar de un
+    conflicto cuanto antes."""
+    if o.cluster:
+        objetivos_cluster(o)
+        return
+    o.extras = discos_extra(o, o.maquina, UNIDADES_EXTRA) if o.extra_disks else []
+    if o.disco_main in o.extras:
+        fallar(16, "El nombre de disco '%s' coincide con uno de los discos extra que se "
+                   "crearían.\nElige otro nombre para el disco principal."
+               % os.path.basename(o.disco_main))
+    o.obj_dominios = [o.vm_name]
+    o.obj_ficheros = [o.disco_main] + o.extras
+
+
+def avisar_imagen_falta(o):
+    """En --dry-run, si la imagen de partida no está en el silo."""
+    if not o.base_img_falta:
+        return
+    compartida = imagen_compartida(o)
+    if compartida:
+        print("    Imagen  : %s no está en el silo; se copiará de %s"
+              % (os.path.basename(o.base_img), compartida))
+    else:
+        print("    Imagen  : %s no está en el silo; se descargará de"
+              % os.path.basename(o.base_img))
+        print("              %s" % o.base_img_url)
+
+
+def mostrar_plan_maquina(o):
+    """Plan de --dry-run de una máquina suelta: genera los ficheros (en el
+    directorio .dry-run) y enseña lo que se haría."""
+    generar_cloudinit(o, o.vm_name, o.host_name, o.ip, "gluster" if o.glusterfs else "normal")
+    construir_comando(o, o.vm_name, o.ram_mb, o.vcpus, [o.disco_main] + o.extras)
+
+    print("→ MODO SIMULACIÓN (--dry-run): no se creará ninguna máquina.")
+    print()
+    print("✔ Validaciones superadas.")
+    print("    Usuario : %s" % o.usuario)
+    if o.prefijo_opt:
+        print("    Prefijo : %s (sustituye al usuario en los dominios y en los discos)"
+              % o.prefijo_opt)
+    print("    Máquina : %s  (hostname: %s)" % (o.vm_name, o.host_name))
+    print("    Sistema : %s; variante %s" % (descripcion_imagen(o.imagen), o.os_variant))
+    print("    Red     : %s (pasarela %s, prefijo /%d)" % (o.red.nombre, o.red.pasarela,
+                                                         o.red.prefijo))
+    if o.ip:
+        print("    IP      : %s, disponible para asignación fija" % o.ip)
+    else:
+        print("    IP      : por DHCP")
+    print("    Recursos: %d MB y %d vCPU" % (o.ram_mb, o.vcpus))
+    avisar_imagen_falta(o)
+    print()
+    print("✔ Ficheros cloud-init generados en %s/" % o.workdir)
+    print()
+    print("Discos que se crearían en %s:" % o.silo)
+    print("    %s  (%s, %s)" % (os.path.basename(o.disco_main),
+                                origen_disco_principal(o, o.base_img), o.tam_disco))
+    for disco in o.extras:
+        print("    %s  (%s)" % (os.path.basename(disco), TAM_DISCO_EXTRA))
+    print()
+    print("Comando que se ejecutaría:")
+    print()
+    for linea in texto_comando(o):
+        print(linea)
+    print()
+    if o.glusterfs:
+        print("Al terminar cloud-init, la máquina se apagaría y se eliminaría el dominio,")
+        print("dejando solo %s como imagen base." % os.path.basename(o.disco_main))
+    else:
+        print("Al terminar cloud-init, se expulsaría su medio y la máquina se apagaría y se")
+        print("volvería a arrancar, para que se ejecute con su configuración definitiva.")
+    print()
+    print("No se ha creado ni modificado ninguna máquina, disco ni red.")
+
+
+def ejecutar_maquina(o):
+    # Conflictos con lo que ya exista (y --limpiar, si se pidió)
+    comprobar_conflictos(o)
+    if o.dry_run:
+        mostrar_plan_maquina(o)
+        return
+    raise NoImplementado("crear la máquina")   # fase 3
+
+
+# --- provision: infraestructura GlusterFS (boletín 2, epígrafe 2.4) -----------------
+#
+# Dos fases, las mismas que describe el boletín, pero todo con cloud-init:
+#
+#   Fase 1  Base gluster-base.qcow2: por defecto, una copia COW de la imagen
+#           cloud de Ubuntu (la misma que SERVER1); con --imagen ubuntu-base,
+#           una copia de ubuntu-base.qcow2, como en la construcción manual
+#           (apartado 2.4 b). Se arranca con glusterfs-server instalado,
+#           glusterd habilitado y el machine-id vacío; se espera a que termine,
+#           se apaga y se elimina su dominio conservando el disco.
+#   Fase 2  Cada nodo es una copia COW de ese disco con sus discos extra
+#           conectados desde el primer arranque. Un instance-id nuevo hace que
+#           cloud-init lo personalice: IP fija, /etc/hosts, discos xfs
+#           montados. Los nodos arrancan en paralelo y se espera a todos.
+
+
+def disco_base_cluster(o):
+    """Disco de la imagen base del clúster: la que se construye en la fase 1 o,
+    con --base, una que ya existe en el silo."""
+    if o.base_opt:
+        return o.silo + "/" + o.base_opt
+    return o.silo + "/" + disco_de(o, CLUSTER_BASE)
+
+
+def discos_extra_nodo(o, host):
+    return discos_extra(o, host, o.unidades_cluster)
+
+
+def texto_discos_montados(o):
+    """«vdb, vdc y vdd en xfs, montados en /gluster1 /gluster2 /gluster3»."""
+    n = len(CLUSTER_MONTAJES)
+    u = o.unidades_cluster[:n]
+    return "%s y %s en xfs, montados en %s" % (", ".join(u[:-1]), u[-1],
+                                                " ".join(CLUSTER_MONTAJES))
+
+
+def texto_discos_sin_formatear(o):
+    """«; vde..vdh sin formatear» (nada si solo están los que se montan)."""
+    n = len(CLUSTER_MONTAJES)
+    u = o.unidades_cluster
+    if len(u) == n + 1:
+        return "; %s sin formatear" % u[n]
+    if len(u) > n + 1:
+        return "; %s..%s sin formatear" % (u[n], u[-1])
+    return ""
+
+
+def calcular_ips_cluster(o):
+    """IPs de los nodos (.10, .11, ...) dentro de la red."""
+    o.cluster_ips = [entero_a_ip(o.red.red_entera + o.cluster_ip_inicial + i)
+                     for i in range(len(CLUSTER_NODOS))]
+
+
+def objetivos_cluster(o):
+    """Todo lo que crea el clúster."""
+    o.obj_dominios, o.obj_ficheros = [], []
+    if not o.base_opt:
+        o.obj_dominios.append("%s-%s" % (o.prefijo_dominio, CLUSTER_BASE))
+        o.obj_ficheros.append(o.silo + "/" + disco_de(o, CLUSTER_BASE))
+    for host in CLUSTER_NODOS:
+        o.obj_dominios.append("%s-%s" % (o.prefijo_dominio, host))
+        o.obj_ficheros.append(o.silo + "/" + disco_de(o, host))
+        o.obj_ficheros += discos_extra_nodo(o, host)
+
+
+def mostrar_plan_cluster(o):
+    base_vm = "%s-%s" % (o.prefijo_dominio, CLUSTER_BASE)
+    base_disco = disco_base_cluster(o)
+
+    print("→ MODO SIMULACIÓN (--dry-run): no se creará nada.")
+    print()
+    print("✔ Validaciones superadas.")
+    print("    Usuario : %s" % o.usuario)
+    if o.prefijo_opt:
+        print("    Prefijo : %s (sustituye al usuario en los dominios y en los discos)"
+              % o.prefijo_opt)
+    print("    Red     : %s (pasarela %s, prefijo /%d)" % (o.red.nombre, o.red.pasarela,
+                                                         o.red.prefijo))
+    print("    Nodos   :")
+    for nodo, ip in zip(CLUSTER_NODOS, o.cluster_ips):
+        print("      %s-%s  →  %s" % (o.prefijo_dominio, nodo, ip))
+    print("    Sistema : %s; variante %s" % (descripcion_imagen(o.imagen), o.os_variant))
+    print("    Recursos: %d MB y %d vCPU por máquina" % (o.ram_mb, o.vcpus))
+    avisar_imagen_falta(o)
+    print()
+
+    if o.base_opt:
+        print("Fase 1: se omite. Los nodos partirán de la imagen que ya existe: %s"
+              % os.path.basename(base_disco))
+    else:
+        print("Fase 1: base GlusterFS")
+        print("    Máquina %s con disco %s (%s, %s)." % (
+            base_vm, os.path.basename(base_disco), origen_disco_principal(o, o.base_img),
+            o.tam_disco))
+        print("    Instala glusterfs-server (y las herramientas para formatear en xfs), "
+              "habilita glusterd, vacía el machine-id.")
+        print("    Al terminar se apaga y se elimina el dominio; el disco se conserva como "
+              "respaldo.")
+        generar_cloudinit(o, base_vm, CLUSTER_BASE, "", "gluster")
+        construir_comando(o, base_vm, o.ram_mb, o.vcpus, [base_disco])
+        print("    Ficheros cloud-init en %s/" % o.workdir)
+        print("    Comando:")
+        for linea in texto_comando(o):
+            print("    " + linea)
+    print()
+
+    print("Fase 2: %d nodos, cada uno con %d discos extra de %s"
+          % (len(CLUSTER_NODOS), len(o.unidades_cluster), TAM_DISCO_EXTRA))
+    print("    %s%s." % (texto_discos_montados(o), texto_discos_sin_formatear(o)))
+    comando_primero = []
+    for i, (host, ip) in enumerate(zip(CLUSTER_NODOS, o.cluster_ips)):
+        vm = "%s-%s" % (o.prefijo_dominio, host)
+        generar_cloudinit(o, vm, host, ip, "nodo")
+        print("    %s: disco %s (COW de %s), IP %s, cloud-init en %s/"
+              % (vm, disco_de(o, host), os.path.basename(base_disco), ip, o.workdir))
+        if i == 0:
+            construir_comando(o, vm, o.ram_mb, o.vcpus,
+                              [o.silo + "/" + disco_de(o, host)] + discos_extra_nodo(o, host))
+            comando_primero = texto_comando(o)
+    print()
+    print("    Comando del primer nodo (los demás son iguales, con su nombre, IP y discos):")
+    for linea in comando_primero:
+        print("    " + linea)
+    print()
+    print("Al terminar cloud-init en los nodos, se expulsaría su medio y se apagarían y se")
+    print("volverían a arrancar, para que se ejecuten con su configuración definitiva.")
+    print()
+    print("No se ha creado ni modificado ninguna máquina, disco ni red.")
+
+
+def ejecutar_cluster(o):
+    comprobar_conflictos(o)
+    if o.dry_run:
+        mostrar_plan_cluster(o)
+        return
+    raise NoImplementado("crear el clúster")   # fase 4
+
+
 # --- provision: configuración, opciones y validaciones -------------------------
 #
 # Port de src/main.sh de ci-provision 3.0.1. Los mensajes y los códigos de
@@ -200,6 +1309,10 @@ class FinProvision(Exception):
         self.codigo = codigo
 
 
+class NoImplementado(Exception):
+    """Lo que todavía no está portado (fases siguientes del port)."""
+
+
 def fallar(codigo, mensaje):
     raise ErrorProvision(codigo, mensaje)
 
@@ -221,15 +1334,17 @@ class Opciones:
         env = os.environ if entorno is None else entorno
         self.usuario = usuario_actual()
         self.home = env.get("HOME") or os.path.expanduser("~")
-        self.silo = os.path.join(self.home, "imagenesMV")
+        # Las rutas se forman como en ci-provision.sh, concatenando: así los
+        # mensajes las escriben igual aunque HOME acabe en «/»
+        self.silo = self.home + "/imagenesMV"
         # La clave del manual. La batería de pruebas del servidor pone aquí su
         # clave de usar y tirar
         self.pubkey_path = (env.get("CI_PROVISION_PUBKEY")
-                            or os.path.join(self.home, ".ssh", "id_rsa.pub"))
+                            or self.home + "/.ssh/id_rsa.pub")
         # Directorio compartido de los profesores: ubuntu-base.qcow2 y, si
         # están, copias de las imágenes cloud. Los tests lo cambian.
         self.dir_compartido = env.get("CI_PROVISION_DIR_COMPARTIDO") or "/home/ssoo-shared"
-        self.ubuntu_base_compartida = os.path.join(self.dir_compartido, "ubuntu-base.qcow2")
+        self.ubuntu_base_compartida = self.dir_compartido + "/ubuntu-base.qcow2"
         # Espera a que cloud-init termine (segundos). Con nombres propios, para
         # no recoger por accidente variables del alumno; se validan en
         # validar_entorno_numerico.
@@ -261,6 +1376,24 @@ class Opciones:
         self.unidades_cluster = ()
         self.prefijo_dominio = self.prefijo_fichero = ""
         self.vm_name = self.host_name = self.disco_main = ""
+
+        # Lo que se averigua al validar el entorno
+        self.pubkey = ""              # la clave pública, ya validada (una sola línea)
+        self.red = None               # RedIPv4 elegida
+        self.cluster_ips = []         # IPs de los nodos del clúster
+        self.extras = []              # discos extra de una máquina suelta
+        self.obj_dominios = []        # lo que va a crear esta ejecución
+        self.obj_ficheros = []
+        self.base_img_falta = False   # en --dry-run: la imagen no está y se descargaría
+        self.disco_usado_por = {}     # fichero → dominio vecino que lo usa
+        self.respaldos = None         # fichero del silo → su imagen base (cargar_respaldos)
+
+        # Ficheros cloud-init y orden de virt-install de la máquina en curso
+        self.workdir = self.user_data = self.meta_data = self.network_data = ""
+        self.virt_install_cmd = []
+
+        # Registro de lo creado, para deshacerlo si algo falla a medias
+        self.dirs_creados = []
 
     @property
     def modo_gestion(self):
@@ -712,13 +1845,230 @@ def calcular_derivados(o):
     if not o.cluster:
         o.vm_name = "%s-%s" % (o.prefijo_dominio, o.maquina)
         o.host_name = o.maquina
-        o.disco_main = os.path.join(o.silo, o.disco_opt or disco_de(o, o.maquina))
+        o.disco_main = o.silo + "/" + (o.disco_opt or disco_de(o, o.maquina))
 
 
 def disco_de(o, maquina):
     """Nombre del disco principal de una máquina en el silo: MAQUINA.qcow2, o
     PREFIJO-MAQUINA.qcow2 con --prefijo (solo el nombre, sin ruta)."""
     return "%s%s.qcow2" % (o.prefijo_fichero, maquina)
+
+
+# --- Entorno: libvirt, silo, clave, red, IPs e imagen -------------------------------
+
+def validar_entorno(o):
+    """Validaciones generales, contra el servidor. Con --listar, --eliminar,
+    --eliminar-todo y --menu solo las que necesitan (no crean nada)."""
+    # Herramientas necesarias (jq y base64 ya no: los hace Python)
+    faltan = [c for c in ("qemu-img", "virsh", "virt-install") if shutil.which(c) is None]
+    if faltan:
+        fallar(38, "No se encuentran estas herramientas necesarias: %s\n"
+                   "Avisa al administrador del servidor." % " ".join(faltan))
+    if not virsh_ok("list", "--name"):
+        fallar(38, "No se puede conectar con libvirt (virsh).\n"
+                   "¿Estás en el servidor de la asignatura? Prueba: virsh list --all")
+    if not os.path.isdir(o.silo):
+        fallar(30, "No existe el silo en: %s\nCréalo con: mkdir -p %s\n"
+                   "y mapéalo como silo en el hipervisor, como se explica en el capítulo de "
+                   "infraestructura virtual." % (o.silo, o.silo))
+    if o.modo_gestion:
+        return
+
+    comprobar_clave_publica(o)
+
+    # Red: elegirla y leer sus datos reales
+    o.red = cargar_red(detectar_red(o))
+
+    # IPs fijas, contra la red real
+    if o.cluster:
+        calcular_ips_cluster(o)
+        for ip in o.cluster_ips:
+            validar_ip_fija(o, ip)
+    elif o.ip:
+        validar_ip_fija(o, o.ip)
+        o.ip = entero_a_ip(ip_a_entero(o.ip))
+
+    # Antes de la descarga, que cuesta tiempo: qué se va a crear y si choca
+    # con algo existente. Con --limpiar, la eliminación se hace después.
+    calcular_objetivos(o)
+    comprobar_base_no_objetivo(o)
+    comprobar_conflictos(o, solo_detectar=True)
+
+    # Que la IP fija no la tenga ya otra máquina
+    if o.cluster:
+        for ip, nodo in zip(o.cluster_ips, CLUSTER_NODOS):
+            comprobar_ip_en_uso(o, ip, "%s-%s" % (o.prefijo_dominio, nodo))
+    elif o.ip:
+        comprobar_ip_en_uso(o, o.ip, o.vm_name)
+
+    # La imagen base, en último lugar: si falta hay que descargarla, y no
+    # tiene sentido hacerlo para fallar después por un dato mal escrito
+    comprobar_imagen_base(o)
+    comprobar_tam_disco(o)
+
+
+def minusculas_c(texto):
+    """${texto,,} con LC_ALL=C: solo las letras ASCII."""
+    return "".join(c.lower() if "A" <= c <= "Z" else c for c in texto)
+
+
+def detectar_red(o):
+    """La red virtual del alumno. El manual pide llamarla USUARIO-red, pero en
+    los servidores hay redes con otros sufijos (-net, -network, _red, sin
+    sufijo) y usuarios con más de una. Se busca entre las que empiezan por el
+    usuario; si hay dudas, se pide --red. Tiene que estar activa."""
+    if o.red_opt:
+        if not red_existe(o.red_opt):
+            fallar(40, "La red '%s' (--red) no existe.\n"
+                       "Consulta las redes disponibles con: virsh net-list --all" % o.red_opt)
+        nombre = o.red_opt
+    else:
+        usuario = minusculas_c(o.usuario)
+        candidatas = []
+        for r in lineas_no_vacias(virsh_salida("net-list", "--all", "--name")):
+            r_min = minusculas_c(r)
+            if (r_min == usuario or r_min.startswith(usuario + "-")
+                    or r_min.startswith(usuario + "_")):
+                candidatas.append(r)
+        if o.usuario + "-red" in candidatas:
+            nombre = o.usuario + "-red"
+        elif len(candidatas) == 1:
+            nombre = candidatas[0]
+        elif not candidatas:
+            fallar(40, "No encuentro ninguna red virtual con tu nombre de usuario ('%s').\n"
+                       "Crea tu red virtual con el nombre '%s-red', o indica cuál usar con: "
+                       "--red NOMBRE\nRedes existentes: virsh net-list --all"
+                   % (o.usuario, o.usuario))
+        else:
+            fallar(44, "Hay varias redes virtuales con tu nombre de usuario: %s\n"
+                       "Indica cuál usar con: --red NOMBRE" % " ".join(candidatas))
+    # La red tiene que estar activa para que virt-install pueda conectar la máquina
+    if not red_activa(nombre):
+        fallar(45, "La red '%s' existe pero está inactiva.\n"
+                   "Actívala con:            virsh net-start %s\n"
+                   "Para que arranque sola:  virsh net-autostart %s" % (nombre, nombre, nombre))
+    return nombre
+
+
+def cargar_red(nombre):
+    """Los datos reales de la red (virsh net-dumpxml), en lugar de dar por
+    supuesta la configuración del manual (192.168.X.0/24, pasarela en .1 y
+    DHCP en .128-.254): así funciona igual con redes de otra topología."""
+    pista = ("\nRevisa su definición con: virsh net-dumpxml %s\n"
+             "Si no ves el problema, avisa a tu profesor con esa salida." % nombre)
+    codigo, xml, _ = virsh("net-dumpxml", nombre)
+    if codigo != 0:
+        fallar(40, "La red '%s' no existe.\n"
+                   "Consulta las redes disponibles con: virsh net-list --all" % nombre)
+    datos = analizar_xml_red(xml)
+    if datos is None:
+        fallar(43, "No se ha podido determinar la configuración IPv4 de la red '%s'.%s"
+               % (nombre, pista))
+    pasarela = datos["address"]
+    prefijo = None
+    if datos["netmask"]:
+        prefijo = mascara_a_prefijo(datos["netmask"])
+        if prefijo is None:
+            fallar(43, "La máscara '%s' de la red '%s' no es válida.%s"
+                   % (datos["netmask"], nombre, pista))
+    elif datos["prefix"]:
+        prefijo = int(datos["prefix"], 10)
+    elif ipv4_valida(pasarela):
+        prefijo = prefijo_por_clase(pasarela)
+    if not ipv4_valida(pasarela):
+        fallar(43, "La pasarela '%s' de la red '%s' no es una IPv4 válida.%s"
+               % (pasarela, nombre, pista))
+    # Rangos DHCP (puede haber varios) y reservas estáticas por MAC, que pueden
+    # estar fuera del rango DHCP
+    rangos = [(a, b) for a, b in datos["rangos"] if ipv4_valida(a) and ipv4_valida(b)]
+    reservas = [r for r in datos["reservas"] if ipv4_valida(r)]
+    return RedIPv4(nombre, pasarela, prefijo, rangos, reservas)
+
+
+def ips_libres(o):
+    return "\n".join(o.red.bloques_libres())
+
+
+def remedio_ip(o):
+    """Final de los mensajes de IP: qué puede hacer el alumno."""
+    if not o.cluster:
+        return "También puedes omitir el parámetro IP para que la máquina use DHCP."
+    n = o.red.primer_hueco(len(CLUSTER_NODOS))
+    if n is not None:
+        return ("Para el clúster hacen falta %d IPs fijas seguidas. Hay hueco a partir de la "
+                ".%d:\n  %s --gluster-cluster --ip-inicial %d"
+                % (len(CLUSTER_NODOS), n, orden_provision(), n))
+    return ("Para el clúster hacen falta %d IPs fijas seguidas y tu red no tiene ningún hueco "
+            "así.\nReduce el rango DHCP de tu red (virsh net-edit %s; p.ej. que empiece en la "
+            ".128)." % (len(CLUSTER_NODOS), o.red.nombre))
+
+
+def validar_ip_fija(o, ip):
+    """Valida una IP fija contra la configuración real de la red."""
+    red = o.red
+    if not ipv4_valida(ip):
+        fallar(41, "La IP '%s' no es una dirección IPv4 válida (cuatro números de 0 a 255 "
+                   "separados por puntos).\nPasarela : %s\nIPs libres para asignación fija:\n"
+                   "%s\n\n%s" % (ip, red.pasarela, ips_libres(o), remedio_ip(o)))
+    n = ip_a_entero(ip)
+    if n & red.mascara_entera != red.red_entera:
+        fallar(41, "La IP '%s' no pertenece a la red '%s'.\nRed      : %s/%d\n"
+                   "Pasarela : %s\nIPs libres para asignación fija:\n%s"
+               % (ip, red.nombre, entero_a_ip(red.red_entera), red.prefijo, red.pasarela,
+                  ips_libres(o)))
+    if n in (red.red_entera, red.difusion_entera):
+        fallar(41, "La IP '%s' es la dirección de red o la de difusión de '%s'. No se puede "
+                   "asignar a una máquina." % (ip, red.nombre))
+    if n == ip_a_entero(red.pasarela):
+        fallar(41, "La IP '%s' es la pasarela de la red '%s'. Elige otra." % (ip, red.nombre))
+    for inicio, fin in red.rangos:
+        if ip_a_entero(inicio) <= n <= ip_a_entero(fin):
+            fallar(42, "La IP '%s' está dentro del rango DHCP de la red '%s' (%s - %s).\n"
+                       "Si se la asignas de forma fija, el servidor DHCP puede entregársela a "
+                       "otra máquina.\nPasarela : %s\nIPs libres para asignación fija:\n%s\n\n%s"
+                   % (ip, red.nombre, inicio, fin, red.pasarela, ips_libres(o), remedio_ip(o)))
+    for reserva in red.reservas:
+        if n == ip_a_entero(reserva):
+            fallar(42, "La IP '%s' ya está reservada por MAC en la red '%s'.\n"
+                       "IPs libres para asignación fija:\n%s\n\n%s"
+                   % (ip, red.nombre, ips_libres(o), remedio_ip(o)))
+
+
+def comprobar_ip_en_uso(o, ip, vm):
+    """¿Usa ya otra máquina esta IP? Se mira en los ficheros cloud-init del silo
+    (las máquinas creadas con el script, aunque estén apagadas) y, si hay ping,
+    si algo responde en ella. No cuenta la máquina que se va a rehacer con
+    --limpiar, que es la que tiene esa IP."""
+    propia = False
+    patron = re.compile(r"- %s/[0-9]+$" % re.escape(ip), re.M)
+    for f in sorted(glob.glob(os.path.join(glob.escape(o.silo), "cloudinit-*", "cip-net.yaml"))):
+        if not os.path.isfile(f):
+            continue
+        directorio = os.path.dirname(f)
+        if directorio.endswith(".dry-run"):
+            continue
+        dominio = os.path.basename(directorio)[len("cloudinit-"):]
+        datos = leer_bytes(f) or b""
+        if not patron.search(datos.decode("utf-8", "surrogateescape")):
+            continue
+        if dominio in o.obj_dominios:
+            propia = True
+        elif virsh_ok("dominfo", dominio):
+            if dominio.startswith(o.usuario + "-"):
+                orden = "%s --eliminar %s" % (orden_provision(), dominio[len(o.usuario) + 1:])
+            else:
+                orden = "%s --prefijo %s --eliminar %s" % (
+                    orden_provision(), dominio.split("-", 1)[0], dominio.split("-", 1)[-1])
+            fallar(42, "La IP '%s' ya la tiene asignada tu máquina '%s'. Dos máquinas con la "
+                       "misma IP no se pueden comunicar.\n"
+                       "Elige otra IP, o elimina antes esa máquina: %s\n"
+                       "IPs libres para asignación fija:\n%s" % (ip, dominio, orden, ips_libres(o)))
+    if (not propia and shutil.which("ping")
+            and ejecutar(["ping", "-c1", "-W1", ip])[0] == 0):
+        fallar(42, "Algo responde ya en la IP '%s' (otra máquina de tu red virtual, o creada a "
+                   "mano).\nSi se la asignas también a '%s', ninguna de las dos funcionará "
+                   "bien. Elige otra IP.\nIPs libres para asignación fija:\n%s\n\n%s"
+               % (ip, vm, ips_libres(o), remedio_ip(o)))
 
 
 # --- Flujo de provision -----------------------------------------------------------
@@ -732,7 +2082,15 @@ def provision(argv):
         analizar_opciones(o, argv)
         validar_opciones(o)
         calcular_derivados(o)
-        # Lo que sigue (validar_entorno y los modos) es de las fases siguientes
+        validar_entorno(o)
+        if o.modo_gestion:
+            raise NoImplementado("--menu, --listar y --eliminar")   # fases 5 y 6
+        if o.cluster:
+            ejecutar_cluster(o)
+        else:
+            ejecutar_maquina(o)
+        return 0
+    except NoImplementado:
         return no_implementado("provision")
     except FinProvision as e:
         return e.codigo

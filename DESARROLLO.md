@@ -8,7 +8,8 @@ asignatura, no necesitas nada de esto: lee el [README](README.md).
 mensajes y los mismos códigos de salida que cada uno. Mientras se porta, lo que
 falta responde «todavía no está implementado» con el código 69, que no usa
 ninguna de las dos herramientas: `diagnosis` entero y, en `provision`, todo lo
-que viene después de validar la línea de órdenes (fase 1 del port, hecha).
+que crea, elimina o lista (fases 3 a 6 del port). Ya están las validaciones y
+`--dry-run` (fases 1 y 2).
 
 ## Estructura
 
@@ -16,9 +17,19 @@ El programa que se distribuye (`ssoo-us`) **se genera**, no se edita a mano. El
 código vive en `src/`, en fragmentos de un único programa:
 
 ```
-src/base.py       Importaciones, versión y ejecutar() (órdenes externas)
-src/imagenes.py   provision: imágenes de partida (--imagen)
-src/provision.py  provision: configuración, opciones, validaciones, ayuda y flujo
+src/base.py       Importaciones, versión, ejecutar() (órdenes externas) y leer_bytes()
+src/red.py        Red virtual: XML de libvirt y aritmética de IPv4 (se compartirá
+                  con diagnosis)
+src/claves.py     provision: la clave pública del alumno
+src/imagenes.py   provision: imágenes de partida, qemu-img, --base y tamaño
+src/cloudinit.py  provision: user-data, meta-data y network-config
+src/virsh.py      provision: llamadas a virsh y análisis de su salida
+src/limpieza.py   provision: quién usa cada disco, qué se puede borrar y
+                  conflictos con lo que ya existe (--limpiar)
+src/maquina.py    provision: orden de virt-install y plan de una máquina suelta
+src/cluster.py    provision: --gluster-cluster
+src/provision.py  provision: configuración, opciones, validaciones (también las
+                  del entorno: libvirt, silo, red, IPs) y flujo
 src/main.py       Despachador de subcomandos, --version y -h
 ```
 
@@ -129,7 +140,7 @@ Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy pasan los de la fase 1 y fallan los demás (por «todavía no está
+Hoy pasan los de las fases 1 y 2 y fallan los demás (por «todavía no está
 implementado»). Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
@@ -142,9 +153,12 @@ libvirt); `ssoo-us provision` las lee con los mismos nombres.
 ### Pruebas de equivalencia con `ci-provision.sh`
 
 Los tests de bats solo miran trozos de la salida. `tools/equivalencia.py` lanza
-las mismas órdenes con `ci-provision.sh` y con `ssoo-us provision` y compara la
-salida, los errores y el código enteros, cambiando solo la orden (`$0`) y la
-línea de la versión:
+las mismas órdenes con `ci-provision.sh` y con `ssoo-us provision`, cada una en
+el entorno de los tests de aceptación (`preparar_entorno` de `helpers.bash`, con
+los mocks) más una preparación propia del caso, y compara la salida, los
+errores, el código, los ficheros que quedan en el `HOME` (con sus permisos) y el
+registro de llamadas a los mocks. Solo cambia la orden (`$0`), la línea de la
+versión y la fecha del `instance-id`:
 
 ```bash
 python3 tools/equivalencia.py --fase 1        # con ../ci-provision/ci-provision.sh
@@ -173,6 +187,13 @@ añaden sus casos.
   solo con caracteres ASCII (`re.fullmatch` con clases `[A-Za-z0-9]`, nunca
   `\w` ni `str.isdigit`), y `decimal()` solo admite cifras (`int()` aceptaría
   espacios, `+` o `1_0`).
+- **Lo que aún no está portado** lanza `NoImplementado`, que `provision()`
+  convierte en el aviso y el código 69. Así una fase se puede cerrar sin dejar
+  a medias lo que viene detrás (por ejemplo, con `--limpiar` sin `--dry-run`
+  no se borra nada hasta la fase 3).
+- **Orden de recorrido:** bash recorre sus tablas asociativas en el orden de su
+  hash; aquí se recorren ordenadas. Solo se nota en el orden de varios motivos
+  de «es la imagen base de…» en un mismo mensaje (`filtrar_borrables`).
 - **Códigos de salida.** Los de `provision` son los de `ci-provision.sh` (10 a
   45, 70 y 71); los de `diagnosis`, los de `ci-diagnosis` (0, 1 y 2). `ssoo-us`
   sin subcomando, o con uno que no existe, sale con 2.

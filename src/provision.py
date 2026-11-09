@@ -58,6 +58,10 @@ class FinProvision(Exception):
         self.codigo = codigo
 
 
+class NoImplementado(Exception):
+    """Lo que todavía no está portado (fases siguientes del port)."""
+
+
 def fallar(codigo, mensaje):
     raise ErrorProvision(codigo, mensaje)
 
@@ -79,15 +83,17 @@ class Opciones:
         env = os.environ if entorno is None else entorno
         self.usuario = usuario_actual()
         self.home = env.get("HOME") or os.path.expanduser("~")
-        self.silo = os.path.join(self.home, "imagenesMV")
+        # Las rutas se forman como en ci-provision.sh, concatenando: así los
+        # mensajes las escriben igual aunque HOME acabe en «/»
+        self.silo = self.home + "/imagenesMV"
         # La clave del manual. La batería de pruebas del servidor pone aquí su
         # clave de usar y tirar
         self.pubkey_path = (env.get("CI_PROVISION_PUBKEY")
-                            or os.path.join(self.home, ".ssh", "id_rsa.pub"))
+                            or self.home + "/.ssh/id_rsa.pub")
         # Directorio compartido de los profesores: ubuntu-base.qcow2 y, si
         # están, copias de las imágenes cloud. Los tests lo cambian.
         self.dir_compartido = env.get("CI_PROVISION_DIR_COMPARTIDO") or "/home/ssoo-shared"
-        self.ubuntu_base_compartida = os.path.join(self.dir_compartido, "ubuntu-base.qcow2")
+        self.ubuntu_base_compartida = self.dir_compartido + "/ubuntu-base.qcow2"
         # Espera a que cloud-init termine (segundos). Con nombres propios, para
         # no recoger por accidente variables del alumno; se validan en
         # validar_entorno_numerico.
@@ -119,6 +125,24 @@ class Opciones:
         self.unidades_cluster = ()
         self.prefijo_dominio = self.prefijo_fichero = ""
         self.vm_name = self.host_name = self.disco_main = ""
+
+        # Lo que se averigua al validar el entorno
+        self.pubkey = ""              # la clave pública, ya validada (una sola línea)
+        self.red = None               # RedIPv4 elegida
+        self.cluster_ips = []         # IPs de los nodos del clúster
+        self.extras = []              # discos extra de una máquina suelta
+        self.obj_dominios = []        # lo que va a crear esta ejecución
+        self.obj_ficheros = []
+        self.base_img_falta = False   # en --dry-run: la imagen no está y se descargaría
+        self.disco_usado_por = {}     # fichero → dominio vecino que lo usa
+        self.respaldos = None         # fichero del silo → su imagen base (cargar_respaldos)
+
+        # Ficheros cloud-init y orden de virt-install de la máquina en curso
+        self.workdir = self.user_data = self.meta_data = self.network_data = ""
+        self.virt_install_cmd = []
+
+        # Registro de lo creado, para deshacerlo si algo falla a medias
+        self.dirs_creados = []
 
     @property
     def modo_gestion(self):
@@ -570,13 +594,230 @@ def calcular_derivados(o):
     if not o.cluster:
         o.vm_name = "%s-%s" % (o.prefijo_dominio, o.maquina)
         o.host_name = o.maquina
-        o.disco_main = os.path.join(o.silo, o.disco_opt or disco_de(o, o.maquina))
+        o.disco_main = o.silo + "/" + (o.disco_opt or disco_de(o, o.maquina))
 
 
 def disco_de(o, maquina):
     """Nombre del disco principal de una máquina en el silo: MAQUINA.qcow2, o
     PREFIJO-MAQUINA.qcow2 con --prefijo (solo el nombre, sin ruta)."""
     return "%s%s.qcow2" % (o.prefijo_fichero, maquina)
+
+
+# --- Entorno: libvirt, silo, clave, red, IPs e imagen -------------------------------
+
+def validar_entorno(o):
+    """Validaciones generales, contra el servidor. Con --listar, --eliminar,
+    --eliminar-todo y --menu solo las que necesitan (no crean nada)."""
+    # Herramientas necesarias (jq y base64 ya no: los hace Python)
+    faltan = [c for c in ("qemu-img", "virsh", "virt-install") if shutil.which(c) is None]
+    if faltan:
+        fallar(38, "No se encuentran estas herramientas necesarias: %s\n"
+                   "Avisa al administrador del servidor." % " ".join(faltan))
+    if not virsh_ok("list", "--name"):
+        fallar(38, "No se puede conectar con libvirt (virsh).\n"
+                   "¿Estás en el servidor de la asignatura? Prueba: virsh list --all")
+    if not os.path.isdir(o.silo):
+        fallar(30, "No existe el silo en: %s\nCréalo con: mkdir -p %s\n"
+                   "y mapéalo como silo en el hipervisor, como se explica en el capítulo de "
+                   "infraestructura virtual." % (o.silo, o.silo))
+    if o.modo_gestion:
+        return
+
+    comprobar_clave_publica(o)
+
+    # Red: elegirla y leer sus datos reales
+    o.red = cargar_red(detectar_red(o))
+
+    # IPs fijas, contra la red real
+    if o.cluster:
+        calcular_ips_cluster(o)
+        for ip in o.cluster_ips:
+            validar_ip_fija(o, ip)
+    elif o.ip:
+        validar_ip_fija(o, o.ip)
+        o.ip = entero_a_ip(ip_a_entero(o.ip))
+
+    # Antes de la descarga, que cuesta tiempo: qué se va a crear y si choca
+    # con algo existente. Con --limpiar, la eliminación se hace después.
+    calcular_objetivos(o)
+    comprobar_base_no_objetivo(o)
+    comprobar_conflictos(o, solo_detectar=True)
+
+    # Que la IP fija no la tenga ya otra máquina
+    if o.cluster:
+        for ip, nodo in zip(o.cluster_ips, CLUSTER_NODOS):
+            comprobar_ip_en_uso(o, ip, "%s-%s" % (o.prefijo_dominio, nodo))
+    elif o.ip:
+        comprobar_ip_en_uso(o, o.ip, o.vm_name)
+
+    # La imagen base, en último lugar: si falta hay que descargarla, y no
+    # tiene sentido hacerlo para fallar después por un dato mal escrito
+    comprobar_imagen_base(o)
+    comprobar_tam_disco(o)
+
+
+def minusculas_c(texto):
+    """${texto,,} con LC_ALL=C: solo las letras ASCII."""
+    return "".join(c.lower() if "A" <= c <= "Z" else c for c in texto)
+
+
+def detectar_red(o):
+    """La red virtual del alumno. El manual pide llamarla USUARIO-red, pero en
+    los servidores hay redes con otros sufijos (-net, -network, _red, sin
+    sufijo) y usuarios con más de una. Se busca entre las que empiezan por el
+    usuario; si hay dudas, se pide --red. Tiene que estar activa."""
+    if o.red_opt:
+        if not red_existe(o.red_opt):
+            fallar(40, "La red '%s' (--red) no existe.\n"
+                       "Consulta las redes disponibles con: virsh net-list --all" % o.red_opt)
+        nombre = o.red_opt
+    else:
+        usuario = minusculas_c(o.usuario)
+        candidatas = []
+        for r in lineas_no_vacias(virsh_salida("net-list", "--all", "--name")):
+            r_min = minusculas_c(r)
+            if (r_min == usuario or r_min.startswith(usuario + "-")
+                    or r_min.startswith(usuario + "_")):
+                candidatas.append(r)
+        if o.usuario + "-red" in candidatas:
+            nombre = o.usuario + "-red"
+        elif len(candidatas) == 1:
+            nombre = candidatas[0]
+        elif not candidatas:
+            fallar(40, "No encuentro ninguna red virtual con tu nombre de usuario ('%s').\n"
+                       "Crea tu red virtual con el nombre '%s-red', o indica cuál usar con: "
+                       "--red NOMBRE\nRedes existentes: virsh net-list --all"
+                   % (o.usuario, o.usuario))
+        else:
+            fallar(44, "Hay varias redes virtuales con tu nombre de usuario: %s\n"
+                       "Indica cuál usar con: --red NOMBRE" % " ".join(candidatas))
+    # La red tiene que estar activa para que virt-install pueda conectar la máquina
+    if not red_activa(nombre):
+        fallar(45, "La red '%s' existe pero está inactiva.\n"
+                   "Actívala con:            virsh net-start %s\n"
+                   "Para que arranque sola:  virsh net-autostart %s" % (nombre, nombre, nombre))
+    return nombre
+
+
+def cargar_red(nombre):
+    """Los datos reales de la red (virsh net-dumpxml), en lugar de dar por
+    supuesta la configuración del manual (192.168.X.0/24, pasarela en .1 y
+    DHCP en .128-.254): así funciona igual con redes de otra topología."""
+    pista = ("\nRevisa su definición con: virsh net-dumpxml %s\n"
+             "Si no ves el problema, avisa a tu profesor con esa salida." % nombre)
+    codigo, xml, _ = virsh("net-dumpxml", nombre)
+    if codigo != 0:
+        fallar(40, "La red '%s' no existe.\n"
+                   "Consulta las redes disponibles con: virsh net-list --all" % nombre)
+    datos = analizar_xml_red(xml)
+    if datos is None:
+        fallar(43, "No se ha podido determinar la configuración IPv4 de la red '%s'.%s"
+               % (nombre, pista))
+    pasarela = datos["address"]
+    prefijo = None
+    if datos["netmask"]:
+        prefijo = mascara_a_prefijo(datos["netmask"])
+        if prefijo is None:
+            fallar(43, "La máscara '%s' de la red '%s' no es válida.%s"
+                   % (datos["netmask"], nombre, pista))
+    elif datos["prefix"]:
+        prefijo = int(datos["prefix"], 10)
+    elif ipv4_valida(pasarela):
+        prefijo = prefijo_por_clase(pasarela)
+    if not ipv4_valida(pasarela):
+        fallar(43, "La pasarela '%s' de la red '%s' no es una IPv4 válida.%s"
+               % (pasarela, nombre, pista))
+    # Rangos DHCP (puede haber varios) y reservas estáticas por MAC, que pueden
+    # estar fuera del rango DHCP
+    rangos = [(a, b) for a, b in datos["rangos"] if ipv4_valida(a) and ipv4_valida(b)]
+    reservas = [r for r in datos["reservas"] if ipv4_valida(r)]
+    return RedIPv4(nombre, pasarela, prefijo, rangos, reservas)
+
+
+def ips_libres(o):
+    return "\n".join(o.red.bloques_libres())
+
+
+def remedio_ip(o):
+    """Final de los mensajes de IP: qué puede hacer el alumno."""
+    if not o.cluster:
+        return "También puedes omitir el parámetro IP para que la máquina use DHCP."
+    n = o.red.primer_hueco(len(CLUSTER_NODOS))
+    if n is not None:
+        return ("Para el clúster hacen falta %d IPs fijas seguidas. Hay hueco a partir de la "
+                ".%d:\n  %s --gluster-cluster --ip-inicial %d"
+                % (len(CLUSTER_NODOS), n, orden_provision(), n))
+    return ("Para el clúster hacen falta %d IPs fijas seguidas y tu red no tiene ningún hueco "
+            "así.\nReduce el rango DHCP de tu red (virsh net-edit %s; p.ej. que empiece en la "
+            ".128)." % (len(CLUSTER_NODOS), o.red.nombre))
+
+
+def validar_ip_fija(o, ip):
+    """Valida una IP fija contra la configuración real de la red."""
+    red = o.red
+    if not ipv4_valida(ip):
+        fallar(41, "La IP '%s' no es una dirección IPv4 válida (cuatro números de 0 a 255 "
+                   "separados por puntos).\nPasarela : %s\nIPs libres para asignación fija:\n"
+                   "%s\n\n%s" % (ip, red.pasarela, ips_libres(o), remedio_ip(o)))
+    n = ip_a_entero(ip)
+    if n & red.mascara_entera != red.red_entera:
+        fallar(41, "La IP '%s' no pertenece a la red '%s'.\nRed      : %s/%d\n"
+                   "Pasarela : %s\nIPs libres para asignación fija:\n%s"
+               % (ip, red.nombre, entero_a_ip(red.red_entera), red.prefijo, red.pasarela,
+                  ips_libres(o)))
+    if n in (red.red_entera, red.difusion_entera):
+        fallar(41, "La IP '%s' es la dirección de red o la de difusión de '%s'. No se puede "
+                   "asignar a una máquina." % (ip, red.nombre))
+    if n == ip_a_entero(red.pasarela):
+        fallar(41, "La IP '%s' es la pasarela de la red '%s'. Elige otra." % (ip, red.nombre))
+    for inicio, fin in red.rangos:
+        if ip_a_entero(inicio) <= n <= ip_a_entero(fin):
+            fallar(42, "La IP '%s' está dentro del rango DHCP de la red '%s' (%s - %s).\n"
+                       "Si se la asignas de forma fija, el servidor DHCP puede entregársela a "
+                       "otra máquina.\nPasarela : %s\nIPs libres para asignación fija:\n%s\n\n%s"
+                   % (ip, red.nombre, inicio, fin, red.pasarela, ips_libres(o), remedio_ip(o)))
+    for reserva in red.reservas:
+        if n == ip_a_entero(reserva):
+            fallar(42, "La IP '%s' ya está reservada por MAC en la red '%s'.\n"
+                       "IPs libres para asignación fija:\n%s\n\n%s"
+                   % (ip, red.nombre, ips_libres(o), remedio_ip(o)))
+
+
+def comprobar_ip_en_uso(o, ip, vm):
+    """¿Usa ya otra máquina esta IP? Se mira en los ficheros cloud-init del silo
+    (las máquinas creadas con el script, aunque estén apagadas) y, si hay ping,
+    si algo responde en ella. No cuenta la máquina que se va a rehacer con
+    --limpiar, que es la que tiene esa IP."""
+    propia = False
+    patron = re.compile(r"- %s/[0-9]+$" % re.escape(ip), re.M)
+    for f in sorted(glob.glob(os.path.join(glob.escape(o.silo), "cloudinit-*", "cip-net.yaml"))):
+        if not os.path.isfile(f):
+            continue
+        directorio = os.path.dirname(f)
+        if directorio.endswith(".dry-run"):
+            continue
+        dominio = os.path.basename(directorio)[len("cloudinit-"):]
+        datos = leer_bytes(f) or b""
+        if not patron.search(datos.decode("utf-8", "surrogateescape")):
+            continue
+        if dominio in o.obj_dominios:
+            propia = True
+        elif virsh_ok("dominfo", dominio):
+            if dominio.startswith(o.usuario + "-"):
+                orden = "%s --eliminar %s" % (orden_provision(), dominio[len(o.usuario) + 1:])
+            else:
+                orden = "%s --prefijo %s --eliminar %s" % (
+                    orden_provision(), dominio.split("-", 1)[0], dominio.split("-", 1)[-1])
+            fallar(42, "La IP '%s' ya la tiene asignada tu máquina '%s'. Dos máquinas con la "
+                       "misma IP no se pueden comunicar.\n"
+                       "Elige otra IP, o elimina antes esa máquina: %s\n"
+                       "IPs libres para asignación fija:\n%s" % (ip, dominio, orden, ips_libres(o)))
+    if (not propia and shutil.which("ping")
+            and ejecutar(["ping", "-c1", "-W1", ip])[0] == 0):
+        fallar(42, "Algo responde ya en la IP '%s' (otra máquina de tu red virtual, o creada a "
+                   "mano).\nSi se la asignas también a '%s', ninguna de las dos funcionará "
+                   "bien. Elige otra IP.\nIPs libres para asignación fija:\n%s\n\n%s"
+               % (ip, vm, ips_libres(o), remedio_ip(o)))
 
 
 # --- Flujo de provision -----------------------------------------------------------
@@ -590,7 +831,15 @@ def provision(argv):
         analizar_opciones(o, argv)
         validar_opciones(o)
         calcular_derivados(o)
-        # Lo que sigue (validar_entorno y los modos) es de las fases siguientes
+        validar_entorno(o)
+        if o.modo_gestion:
+            raise NoImplementado("--menu, --listar y --eliminar")   # fases 5 y 6
+        if o.cluster:
+            ejecutar_cluster(o)
+        else:
+            ejecutar_maquina(o)
+        return 0
+    except NoImplementado:
         return no_implementado("provision")
     except FinProvision as e:
         return e.codigo

@@ -3,7 +3,7 @@
 import re
 import unittest
 
-from comun import lanzar, su
+from comun import entorno_sin_libvirt, lanzar, su
 
 
 class TestDespachador(unittest.TestCase):
@@ -54,11 +54,11 @@ class TestDespachador(unittest.TestCase):
             self.assertEqual(salida, "")
             self.assertRegex(errores, re.escape("ssoo-us diagnosis: todavía no está implementado"))
 
-    def test_provision_no_implementado_tras_las_opciones(self):
-        # Fase 1: las opciones se validan; lo que sigue aún no está portado
-        codigo, salida, errores = lanzar("provision", "--dry-run", "server1")
-        self.assertEqual(codigo, su.NO_IMPLEMENTADO)
-        self.assertIn("ssoo-us provision: todavía no está implementado", errores)
+    def test_provision_llega_a_libvirt(self):
+        codigo, _, errores = lanzar("provision", "--dry-run", "server1",
+                                    entorno=entorno_sin_libvirt())
+        self.assertEqual(codigo, 38)
+        self.assertIn("ERROR [38] No se puede conectar con libvirt", errores)
 
     def test_no_implementado_no_choca_con_otros_codigos(self):
         ci_provision = set(range(10, 46)) | {70, 71}

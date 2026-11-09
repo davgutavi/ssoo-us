@@ -10,6 +10,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
 
 sys.dont_write_bytecode = True
 
@@ -31,13 +32,30 @@ def cargar():
 su = cargar()
 
 
-def lanzar(*argumentos):
+def lanzar(*argumentos, entorno=None):
     """Ejecuta ssoo-us como un proceso aparte, con el Python de los tests.
     Devuelve (código, salida, errores)."""
     p = subprocess.run([sys.executable, SCRIPT] + list(argumentos),
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE)
+                       stderr=subprocess.PIPE, env=entorno)
     return p.returncode, p.stdout.decode("utf-8"), p.stderr.decode("utf-8")
+
+
+_SIN_LIBVIRT = tempfile.TemporaryDirectory()
+
+
+def entorno_sin_libvirt():
+    """Un entorno con qemu-img, virsh y virt-install de mentira, y un virsh que
+    no puede conectar con libvirt: provision se detiene con el error 38, aquí
+    y en un servidor con libvirt de verdad."""
+    directorio = _SIN_LIBVIRT.name
+    for orden, codigo in (("qemu-img", 0), ("virt-install", 0), ("virsh", 1)):
+        ruta = os.path.join(directorio, orden)
+        if not os.path.exists(ruta):
+            with open(ruta, "w") as f:
+                f.write("#!/bin/sh\nexit %d\n" % codigo)
+            os.chmod(ruta, 0o755)
+    return dict(os.environ, PATH=directorio + os.pathsep + "/usr/bin:/bin")
 
 
 def leer(ruta):

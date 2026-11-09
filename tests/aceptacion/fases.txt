@@ -72,9 +72,14 @@
 2	auditoría 15: una red con DHCPv6 no rompe nada
 2	auditoría 19: las variables de entorno de espera llevan prefijo y se validan
 2	auditoría 20: el instance-id es nuevo en cada creación
+2	la descarga se hace después de las demás validaciones
+2	una máquina llamada como una imagen cloud: error 10 sin hablar de --base, ni con --limpiar
+2	un conflicto se detecta antes de descargar la imagen base
+2	si el disco ya existe: error 21 con instrucciones y sin crear nada
+2	un error de validación no deja rastro
+2	clúster: si las IPs .10-.13 caen en el DHCP de la red, error 42 antes de crear nada
 3	sin imagen base: la descarga y continúa
 3	--imagen debian12: descarga la imagen de Debian si falta y declara la variante debian12
-3	la descarga se hace después de las demás validaciones
 3	descarga fallida: error 37 con el comando manual y sin restos
 3	descarga corrupta (portal cautivo): error 37 y se elimina lo descargado
 3	máquina básica con DHCP
@@ -89,11 +94,9 @@
 3	--prefijo: dominio y discos con prefijo; lo de tu usuario no se toca ni con --limpiar
 3	si virt-install falla después de definir el dominio, el rollback también lo elimina
 3	sin --tam, el disco toma el tamaño de la imagen de partida si es mayor que 40G
-3	una máquina llamada como una imagen cloud: error 10 sin hablar de --base, ni con --limpiar
 3	confirmación por teclado de --limpiar: 'n' cancela sin tocar nada; 's' elimina y sigue
 3	--ssh-pass -: la contraseña se pide por teclado; sin terminal, error 11
 3	--tam admite minúsculas; cloud-init 'degraded done' cuenta como terminado con errores
-3	un conflicto se detecta antes de descargar la imagen base
 3	si cloud-init no termina pero el agente ya da la IP, el aviso y el resumen la muestran
 3	sin wget se descarga con curl
 3	el agente puede tardar en devolver el resultado de cloud-init status
@@ -103,11 +106,9 @@
 3	aviso de known_hosts cuando la IP ya figura con otra clave
 3	--ram y --vcpus llegan a virt-install
 3	--no-wait no consulta al agente ni expulsa el medio
-3	si el disco ya existe: error 21 con instrucciones y sin crear nada
 3	si el dominio ya existe: error 21 con el undefine
 3	--limpiar elimina exactamente lo que va a crear y sigue
 3	si virt-install falla: lo dice, borra los discos que había creado y no deja dominio
-3	un error de validación no deja rastro
 3	espera aunque el agente tarde en responder
 3	no da la máquina por lista mientras cloud-init siga en marcha
 3	si el agente no permite consultar cloud-init, se asume lista y se avisa
@@ -136,7 +137,6 @@
 4	clúster con --imagen debian12: la base es copia COW de Debian y administrador como en SERVER1
 4	clúster: conflicto con un disco de un nodo, y --limpiar lo resuelve
 4	clúster con --base: se omite la fase 1 y --limpiar no toca la imagen base
-4	clúster: si las IPs .10-.13 caen en el DHCP de la red, error 42 antes de crear nada
 4	clúster: si la base no se apaga, error 70 y rollback de la base
 4	clúster: si cloud-init falla en la base, error 71, la base se conserva y no hay nodos
 4	clúster con --no-wait: espera a la base pero no a los nodos

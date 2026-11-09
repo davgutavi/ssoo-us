@@ -8,6 +8,8 @@ https://github.com/davgutavi/ssoo-us
 Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 """
 
+import glob
+import json
 import os
 import pwd
 import re
@@ -15,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import termios
+import time
+import xml.etree.ElementTree as ET
 
 VERSION = "0.1.0-dev"
 PROGRAMA = "ssoo-us"
@@ -63,3 +67,12 @@ def ejecutar(argv, timeout=None, entrada=None, entorno=None):
         return None, "", ""
     return (p.returncode, p.stdout.decode("utf-8", "replace"),
             p.stderr.decode("utf-8", "replace"))
+
+
+def leer_bytes(ruta):
+    """Contenido de un archivo, o None si no existe o no se puede leer."""
+    try:
+        with open(ruta, "rb") as f:
+            return f.read()
+    except OSError:
+        return None

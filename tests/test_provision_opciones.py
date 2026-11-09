@@ -7,7 +7,7 @@ import pty
 import sys
 import unittest
 
-from comun import SCRIPT, su
+from comun import SCRIPT, entorno_sin_libvirt, su
 
 
 def opciones(*argv, entorno=None):
@@ -122,7 +122,8 @@ class TestContrasenaPorTeclado(unittest.TestCase):
     def lanzar_con_terminal(self, respuesta, *argv):
         pid, fd = pty.fork()
         if pid == 0:
-            os.execv(sys.executable, [sys.executable, SCRIPT, "provision"] + list(argv))
+            os.execve(sys.executable, [sys.executable, SCRIPT, "provision"] + list(argv),
+                      entorno_sin_libvirt())
         salida, enviada = b"", False
         while True:
             try:
@@ -142,7 +143,7 @@ class TestContrasenaPorTeclado(unittest.TestCase):
         codigo, salida = self.lanzar_con_terminal(b"Secreta9", "--ssh-pass", "-", "server1")
         self.assertIn("Contraseña para administrador: ", salida)
         self.assertNotIn("Secreta9", salida)
-        self.assertEqual(codigo, su.NO_IMPLEMENTADO)   # siguió: fase 2 sin portar
+        self.assertEqual(codigo, 38)   # siguió hasta libvirt
 
     def test_vacia(self):
         codigo, salida = self.lanzar_con_terminal(b"", "--ssh-pass", "-", "server1")
