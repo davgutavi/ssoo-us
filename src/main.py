@@ -27,16 +27,6 @@ def nombre_programa():
     return sys.argv[0] if sys.argv and sys.argv[0] else PROGRAMA
 
 
-def no_implementado(subcomando):
-    print("%s %s: todavía no está implementado (versión %s, en desarrollo)."
-          % (PROGRAMA, subcomando, VERSION), file=sys.stderr)
-    return NO_IMPLEMENTADO
-
-
-def diagnosis(argv):
-    return no_implementado("diagnosis")
-
-
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     for flujo in (sys.stdout, sys.stderr):

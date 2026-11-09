@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # ARCHIVO GENERADO por tools/importar_aceptacion.py a partir de
-# ci-provision/test/ci-provision.bats (7bf6aff). No lo edite a mano: vuelva a importarlo.
+# ci-provision/test/ci-provision.bats (e16e1ce). No lo edite a mano: vuelva a importarlo.
 # Las diferencias con el original están en la lista SUSTITUCIONES del
 # importador.
 # Tests locales de ci-provision.sh. No necesitan libvirt: virsh y virt-install
@@ -916,6 +916,31 @@ qinfo() {
     grep -q -- "Disco   : glusterbase.qcow2" "$MOCK_STATE/log"
     grep -q -- "Tamaño  : 40 GiB (virtual)" "$MOCK_STATE/log"
     assert_output --partial "Sin cambios."
+}
+
+@test "3.0.3: Ctrl+C en lo que lanza el asistente lo interrumpe y lo deshace" {
+    export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
+    export MOCK_VIRT_INSTALL_CTRL_C=1
+    printf '%s\n' "0 basica" "0 server1" "0 " "0 debian12" "0 \"no-root\"" "0" "1" > "$MOCK_WHIPTAIL"
+    run bash "$SCRIPT" --menu </dev/null
+    assert_success
+    assert_output --partial "Interrumpido por el usuario."
+    assert_output --partial "(el comando ha terminado con el código 130)"
+    ! dominio_existe "${USUARIO}-server1"
+    [ ! -e "$SILO/server1.qcow2" ]
+}
+
+@test "3.0.3: la lista del asistente ve lo creado desde el propio menú" {
+    run bash "$SCRIPT" --imagen debian12 --glusterfs glusterbase
+    assert_success
+    export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
+    # Se lista (se carga el mapa), se crea server1 desde el menú y se vuelve a listar
+    printf '%s\n' "0 listar" "1" "0 basica" "0 server1" "0 " "0 debian12" "0 \"no-root\"" "0" \
+        "0 listar" "0 m:${USUARIO}-server1" "0" "1" "1" > "$MOCK_WHIPTAIL"
+    run bash "$SCRIPT" --menu </dev/null
+    assert_success
+    dominio_existe "${USUARIO}-server1"
+    grep -q -- "          server1.qcow2 (copia de debian12.qcow2)" "$MOCK_STATE/log"
 }
 
 @test "--menu: la contraseña no se muestra en el comando; sin whiptail, error 38; sin más opciones" {

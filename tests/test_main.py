@@ -1,6 +1,7 @@
 """El despachador de subcomandos: --version, -h y los subcomandos."""
 
-import re
+import os
+import tempfile
 import unittest
 
 from comun import entorno_sin_libvirt, lanzar, su
@@ -46,24 +47,33 @@ class TestDespachador(unittest.TestCase):
         self.assertEqual(codigo, 2)
         self.assertIn("opción desconocida: --listar", errores)
 
-    def test_diagnosis_no_implementado(self):
-        # Hasta que se porte: un código que no usan ci-provision ni ci-diagnosis
-        for resto in ((), ("server1",), ("-h",), ("--version",)):
-            codigo, salida, errores = lanzar("diagnosis", *resto)
-            self.assertEqual(codigo, su.NO_IMPLEMENTADO, resto)
-            self.assertEqual(salida, "")
-            self.assertRegex(errores, re.escape("ssoo-us diagnosis: todavía no está implementado"))
+    def test_diagnosis_version_y_ayuda(self):
+        self.assertEqual(lanzar("diagnosis", "--version"), (0, "ssoo-us %s\n" % su.VERSION, ""))
+        codigo, salida, _ = lanzar("diagnosis", "-h")
+        self.assertEqual(codigo, 0)
+        self.assertTrue(salida.startswith("Uso: ./ssoo-us diagnosis "))
+
+    def test_diagnosis_opcion_desconocida(self):
+        codigo, salida, errores = lanzar("diagnosis", "--listar")
+        self.assertEqual((codigo, salida), (2, ""))
+        self.assertIn("ssoo-us diagnosis: opción desconocida: --listar", errores)
+        self.assertIn("Consulte la ayuda con: ./ssoo-us diagnosis --ayuda", errores)
+
+    def test_diagnosis_sin_el_modulo_libvirt(self):
+        # Un libvirt que no se puede importar, aquí y en un servidor que sí lo tiene
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "libvirt.py"), "w") as f:
+                f.write("raise ImportError('simulado')\n")
+            codigo, salida, errores = lanzar("diagnosis", "server1",
+                                             entorno=dict(os.environ, PYTHONPATH=d))
+        self.assertEqual((codigo, salida), (2, ""))
+        self.assertIn("ssoo-us diagnosis: falta el módulo libvirt de Python", errores)
 
     def test_provision_llega_a_libvirt(self):
         codigo, _, errores = lanzar("provision", "--dry-run", "server1",
                                     entorno=entorno_sin_libvirt())
         self.assertEqual(codigo, 38)
         self.assertIn("ERROR [38] No se puede conectar con libvirt", errores)
-
-    def test_no_implementado_no_choca_con_otros_codigos(self):
-        ci_provision = set(range(10, 46)) | {70, 71}
-        ci_diagnosis = {0, 1, 2}
-        self.assertNotIn(su.NO_IMPLEMENTADO, ci_provision | ci_diagnosis)
 
 
 class TestEjecutar(unittest.TestCase):

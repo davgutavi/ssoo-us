@@ -17,8 +17,7 @@
 # obsoleta (p.ej. 'chpasswd: list:' o 'ssh-authorized-keys') termina en
 # 'degraded done', que el script trata como error.
 
-DNS_DE_LA_US = ("150.214.186.69", "150.214.130.15")
-INTERFAZ_VM = "enp1s0"
+# DNS_DE_LA_US e INTERFAZ_VM están en base.py: diagnosis comprueba lo mismo
 
 
 def yaml_comillas(texto):

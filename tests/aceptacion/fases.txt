@@ -163,3 +163,5 @@
 6	--menu: la contraseña no se muestra en el comando; sin whiptail, error 38; sin más opciones
 6	auditoría 5 y 6: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes
 6	auditoría 21: el asistente rechaza nombres que empiezan por '-' y la ficha respeta --prefijo
+6	3.0.3: Ctrl+C en lo que lanza el asistente lo interrumpe y lo deshace
+6	3.0.3: la lista del asistente ve lo creado desde el propio menú

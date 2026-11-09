@@ -17,9 +17,9 @@ class TestArnes(unittest.TestCase):
         cls.nombres = re.findall(r'^@test "(.*)" \{$',
                                  leer(os.path.join(ACEPTACION, "ci-provision.bats")), re.M)
 
-    def test_153_tests(self):
-        self.assertEqual(len(self.nombres), 153)
-        self.assertEqual(len(set(self.nombres)), 153, "hay nombres de test repetidos")
+    def test_155_tests(self):
+        self.assertEqual(len(self.nombres), 155)
+        self.assertEqual(len(set(self.nombres)), 155, "hay nombres de test repetidos")
 
     def test_cada_test_en_una_fase(self):
         fases = {}

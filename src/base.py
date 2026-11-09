@@ -10,7 +10,9 @@ Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 
 import base64
 import glob
+import grp
 import hashlib
+import ipaddress
 import json
 import os
 import pwd
@@ -19,19 +21,31 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import termios
+import textwrap
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
+
+try:
+    import yaml
+except ImportError:  # diagnosis: sin PyYAML se omiten las comprobaciones de estructura
+    yaml = None
 
 VERSION = "0.1.0-dev"
 PROGRAMA = "ssoo-us"
 
-# Código de salida de lo que todavía no está portado. No lo usa ci-provision
-# (10..45, 70 y 71) ni ci-diagnosis (0, 1 y 2): un test de aceptación que
-# espere un código concreto falla siempre con este.
-NO_IMPLEMENTADO = 69
+
+# --- Lo que comparten provision y diagnosis ----------------------------------
+#
+# provision lo genera y diagnosis lo comprueba: si cambia, cambia en los dos.
+
+IMAGEN_NOBLE = "noble-server-cloudimg-amd64.img"     # Ubuntu 24.04 (manual, 5.4.1)
+INTERFAZ_VM = "enp1s0"
+DNS_DE_LA_US = ("150.214.186.69", "150.214.130.15")
 
 
 # --- Órdenes externas -------------------------------------------------------

@@ -1,6 +1,6 @@
 # --- provision: configuración, opciones y validaciones -------------------------
 #
-# Port de src/main.sh de ci-provision 3.0.2. Los mensajes y los códigos de
+# Port de src/main.sh de ci-provision 3.0.3. Los mensajes y los códigos de
 # salida son los mismos: los tests de aceptación (tests/aceptacion) son los de
 # ci-provision.
 
@@ -56,10 +56,6 @@ class FinProvision(Exception):
     def __init__(self, codigo=0):
         Exception.__init__(self, codigo)
         self.codigo = codigo
-
-
-class NoImplementado(Exception):
-    """Lo que todavía no está portado (fases siguientes del port)."""
 
 
 class FalloInesperado(Exception):
@@ -924,8 +920,6 @@ def provision(argv):
         signal.signal(senal, senal_recibida)
     try:
         codigo = ejecutar_provision(o, argv)
-    except NoImplementado:
-        return no_implementado("provision")
     except FinProvision as e:
         return e.codigo
     except ErrorProvision as e:

@@ -8,7 +8,7 @@
 #                /home/ssoo-shared; solo para la base GlusterFS, si se quiere
 #                hacer como la construcción manual del boletín (epígrafe 2.4),
 #                sobre una copia suya en el silo
-IMAGEN_NOBLE = "noble-server-cloudimg-amd64.img"
+# IMAGEN_NOBLE, el nombre de la primera, está en base.py: diagnosis lo comparte
 URL_NOBLE = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
 IMAGEN_DEBIAN = "debian12.qcow2"
 URL_DEBIAN = ("https://cloud.debian.org/images/cloud/bookworm/latest/"

@@ -91,9 +91,6 @@ VIRT_INSTALL_LENTO = r'''mkdir -p "$BATS_TEST_TMPDIR/lento"
 printf '#!/bin/bash\nsleep 6\nexec "%s" "$@"\n' "$MOCKS_DIR/virt-install" > "$BATS_TEST_TMPDIR/lento/virt-install"
 chmod +x "$BATS_TEST_TMPDIR/lento/virt-install"; export PATH="$BATS_TEST_TMPDIR/lento:$PATH"'''
 CREAR_SERVER1 = 'programa server1 >/dev/null 2>&1'
-LISTA_DEL_ASISTENTE = ("ci-provision lee las imágenes base una vez por sesión del asistente y, tras "
-                       "crear un disco desde él, la lista lo describe como «disco suelto»; ssoo-us "
-                       "las vuelve a leer")
 
 
 def respuestas(*lineas):
@@ -522,12 +519,11 @@ CASOS = [
     (6, ["--menu"], {}, 'bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"; for p in virsh virt-install '
                         'wget; do ln -s "$MOCKS_DIR/$p" "$bin/$p"; done; '
                         'export PATH="$bin:${PATH#"$MOCKS_DIR:"}"'),
-    # La lista vuelve a leer las imágenes base (ci-provision.sh las leía una vez
-    # por sesión del asistente)
+    # La lista vuelve a leer las imágenes base (hasta la 3.0.2, ci-provision.sh
+    # las leía una vez por sesión del asistente)
     (6, ["--menu", "--si"], {}, CREAR_SERVER1 + '; '
                                 + respuestas("0 listar", "1", "0 base", "0 gb", "0 noble", "1", "0",
-                                             "0 listar", "0 d:$SILO/gb.qcow2", "0", "1", "1"),
-     {"conocida": LISTA_DEL_ASISTENTE}),
+                                             "0 listar", "0 d:$SILO/gb.qcow2", "0", "1", "1")),
 ]
 
 

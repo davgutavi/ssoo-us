@@ -278,9 +278,9 @@ class Asistente:
     def listar(self):
         """Lista de máquinas y discos sueltos; al elegir uno se abre su ficha."""
         o = self.o
-        # ci-provision.sh lee las imágenes base una sola vez por sesión del
-        # asistente, y tras crear o eliminar algo desde él la lista mostraba lo
-        # de antes. Aquí se vuelven a leer cada vez.
+        # Las imágenes base se vuelven a leer cada vez: tras crear o eliminar
+        # algo desde el asistente, la lista tiene que verlo (ci-provision lo
+        # corrigió en la 3.0.3)
         o.respaldos = None
         cargar_respaldos(o)
 
@@ -399,8 +399,9 @@ class Asistente:
             entorno["CI_PROVISION_SSH_PASS"] = self.pass_asistente
         # Ctrl+C lo atiende el proceso hijo, que deshace lo suyo; aquí no hace
         # nada. Con un manejador que no hace nada y no con SIG_IGN, que el hijo
-        # heredaría: en ci-provision.sh («trap '' INT») el hijo no podía
-        # atrapar Ctrl+C y la creación lanzada desde el menú no se podía parar.
+        # heredaría: con la señal ignorada, el hijo no podría atrapar Ctrl+C y
+        # la creación lanzada desde el menú no se podría parar (como en
+        # ci-provision hasta la 3.0.2, con «trap '' INT»; la 3.0.3 usa «trap ':' INT»).
         anterior_int = signal.signal(signal.SIGINT, lambda *_: None)
         try:
             codigo = subprocess.call([sys.executable, nombre_programa(), "provision"] + argumentos,

@@ -5,12 +5,12 @@ asignatura, no necesitas nada de esto: lee el [README](README.md).
 
 `ssoo-us` sustituirá a `ci-provision.sh` (subcomando `provision`) y a
 `ci-diagnosis` (subcomando `diagnosis`), con la misma interfaz, los mismos
-mensajes y los mismos códigos de salida que cada uno. `provision` está
-completo (fases 1 a 6 del port: validaciones, `--dry-run`, máquina suelta,
-GlusterFS, `--listar`, `--eliminar`, `--eliminar-todo` y el asistente
-`--menu`); falta probarlo en los servidores (fase 7). `diagnosis` responde
-«todavía no está implementado» con el código 69, que no usa ninguna de las dos
-herramientas.
+mensajes y los mismos códigos de salida que cada uno. Están los dos
+subcomandos: `provision` (fases 1 a 6 del port: validaciones, `--dry-run`,
+máquina suelta, GlusterFS, `--listar`, `--eliminar`, `--eliminar-todo` y el
+asistente `--menu`) y `diagnosis` (fase 8: `--antes` y `--acceso`, como
+`ci-diagnosis` 1.0.2). Falta probarlos en los servidores (fase 7, y la batería
+de `ci-diagnosis` para `diagnosis`).
 
 ## Estructura
 
@@ -18,7 +18,9 @@ El programa que se distribuye (`ssoo-us`) **se genera**, no se edita a mano. El
 código vive en `src/`, en fragmentos de un único programa:
 
 ```
-src/base.py       Importaciones, versión, ejecutar() (órdenes externas) y leer_bytes()
+src/base.py       Importaciones, versión, lo que comparten provision y diagnosis
+                  (imagen de Ubuntu, interfaz y DNS de las máquinas), ejecutar()
+                  (órdenes externas de provision) y leer_bytes()
 src/red.py        Red virtual: XML de libvirt y aritmética de IPv4 (se compartirá
                   con diagnosis)
 src/claves.py     provision: la clave pública del alumno
@@ -38,7 +40,22 @@ src/gestion.py    provision: --listar, --eliminar y --eliminar-todo
 src/asistente.py  provision: el asistente con menús de whiptail (--menu)
 src/provision.py  provision: configuración, opciones, validaciones (también las
                   del entorno: libvirt, silo, red, IPs), flujo y marcha atrás
+src/diagnosis_base.py      diagnosis: Resultado (OK, AVISO, ERROR, --), Informe,
+                           formato de la salida y ejecutar_lectura() (órdenes
+                           externas, con lista blanca)
+src/diagnosis_textos.py    diagnosis: secciones del manual y lo que espera
+src/diagnosis_claves.py    diagnosis: claves SSH (B5, B7, B10, D6)
+src/diagnosis_archivos.py  diagnosis: user-data, meta-data y network-config
+src/diagnosis_servidor.py  diagnosis: libvirt (solo lectura), silos, red,
+                           imagen y disco, nombres libres y permisos
+src/diagnosis_acceso.py    diagnosis: --acceso (estado, conectividad, ssh) y la
+                           orden de virt-install de su registro
+src/diagnosis_disco.py     diagnosis: el disco de una máquina apagada (guestfish)
+src/diagnosis.py           diagnosis: opciones y flujo
 src/main.py       Despachador de subcomandos, --version y -h
+
+tools/ssoo-us-admin   Para el profesor: diagnosis sobre la cuenta de un alumno,
+                      como él (con sudo)
 ```
 
 Tras modificar cualquiera de ellos, regenera el programa:
@@ -70,20 +87,37 @@ Sobre el programa generado, que es lo que usará el alumnado:
 python3 -m unittest discover -s tests
 ```
 
-Para tener PyYAML, como en `ci-diagnosis` (en macOS, PyYAML 5.4.1 no se compila
-con los Python recientes; PyYAML 6 tiene la misma interfaz para lo que se usa):
+`diagnosis` necesita PyYAML para revisar la estructura de los archivos de
+cloud-init: sin él, esos tests se omiten (unos 60). Para tenerlo (en macOS,
+PyYAML 5.4.1 no se compila con los Python recientes; PyYAML 6 tiene la misma
+interfaz para lo que se usa):
 
 ```bash
 python3.11 -m venv .venv && .venv/bin/pip install pyyaml==6.0.2
 .venv/bin/python -m unittest discover -s tests
 ```
 
+Los de `diagnosis` son `tests/test_diagnosis_*.py`, con `comun_diagnosis.py` y
+`falso_libvirt.py` (una conexión de libvirt simulada que falla si se le pide
+algo que no sea de lectura). Vienen de los de `ci-diagnosis` 1.0.2; además:
+
+- `test_diagnosis_solo_lee.py`: `diagnosis` solo lee, aunque viva en un
+  programa que escribe. Revisa los fuentes `src/diagnosis*.py` (no el programa
+  entero, como hacía `ci-diagnosis`): ni llamadas de `os` que escriban, ni
+  `open` para escribir, ni `shutil` o `tempfile`, ni `subprocess` fuera de
+  `ejecutar_lectura()`, que solo admite las órdenes de su lista. Y no usan nada
+  de `provision` (ni `ejecutar()`, ni `virsh()`, ni `fallar()`...): solo lo
+  suyo, lo que `base.py` comparte a propósito (lista `COMPARTIDO`) y Python.
+- `test_diagnosis_cruzado.py`: lo que genera `provision` (máquina suelta, con
+  `--ssh-pass`, con `--extra-disks`, GlusterFS y nodo del clúster) no da ningún
+  ERROR en `diagnosis`.
+
 Ningún test ni ejemplo puede llevar un UVUS real: el alumno de prueba es
 `alu0000`.
 
 ### Tests de aceptación de `provision` (bats)
 
-Son los 153 tests de bats de `ci-provision`, sin tocar ni una línea de lo que
+Son los 155 tests de bats de `ci-provision`, sin tocar ni una línea de lo que
 comprueban: `ssoo-us provision` tiene que pasar los mismos que `ci-provision.sh`.
 
 Los tests de `ci-provision` lanzan el script siempre como `bash "$SCRIPT" ...`,
@@ -146,13 +180,13 @@ bash tools/aceptacion.sh --tap > /tmp/a.tap      # en formato TAP, para contarlo
 Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 (`SSOO_US_PYTHON` lo cambia). Tarda alrededor de un minuto.
 
-`tests/aceptacion/fases.txt` reparte los 153 tests entre las fases del port
+`tests/aceptacion/fases.txt` reparte los 155 tests entre las fases del port
 (una línea por test: la fase y su nombre exacto); las fases son acumulativas y
 `--fase N` lanza los de las fases 0 a N. Un test unitario comprueba que cada
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy pasan todos (151, y los 2 omitidos). Para comprobar el propio arnés se puede lanzar contra
+Hoy pasan todos (153, y los 2 omitidos). Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
 menos los seis que dependen de las sustituciones de `$ORDEN` y de `--version`.
@@ -189,27 +223,70 @@ añaden sus casos.
 
 ### Diferencias deliberadas con `ci-provision`
 
-La referencia es `ci-provision` 3.0.2, que corrigió el resumen de
-`--gluster-cluster --base IMAGEN` (la 3.0.1 escribía «(nodosIMAGEN)» y
-«--eliminar … server4IMAGEN»). En la herramienta, un caso con una diferencia
-deliberada lleva la opción `conocida` con el motivo: se muestra con «≈» y no
-cuenta como fallo. Son estas:
+Ninguna. La referencia es `ci-provision` 3.0.3. Los tres fallos que salieron al
+portarlo se corrigieron allí: el resumen de `--gluster-cluster --base IMAGEN`
+(3.0.2), y Ctrl+C en lo que lanza el asistente y la lista del asistente con
+datos de la primera vez (3.0.3). En la herramienta, un caso con una diferencia
+deliberada llevaría la opción `conocida` con el motivo: se muestra con «≈» y no
+cuenta como fallo.
 
-- **La lista del asistente vuelve a leer las imágenes base cada vez.**
-  `ci-provision.sh` las lee una vez por sesión del asistente: tras crear o
-  eliminar algo desde él, «Mostrar mis máquinas virtuales» describía lo nuevo
-  con lo de antes (p. ej. una base recién hecha como «disco suelto»).
-- **Ctrl+C en lo que lanza el asistente.** `ci-provision.sh` ignora SIGINT
-  (`trap '' INT`) mientras trabaja el proceso hijo, y el hijo hereda la señal
-  ignorada: un `bash` no puede atrapar una señal que ya venía ignorada, así que
-  Ctrl+C no paraba (ni deshacía) nada de lo lanzado desde el menú. `ssoo-us`
-  pone en el padre un manejador que no hace nada, que el hijo no hereda. La
-  herramienta no lo prueba (necesitaría una terminal); lo fija un test
-  unitario (`TestLanzar`).
+Ctrl+C en lo que lanza el asistente no lo prueba la herramienta (necesitaría
+una terminal): lo fija un test unitario (`TestLanzar`). Mientras trabaja el
+proceso hijo, el padre atiende SIGINT con un manejador que no hace nada; no lo
+ignora, porque el hijo heredaría la señal ignorada y ya no podría atraparla.
+
+### Pruebas de equivalencia con `ci-diagnosis`
+
+`tools/equivalencia_diagnosis.py` carga `ci-diagnosis` (el archivo generado de
+`../ci-diagnosis`) y `ssoo-us` en el mismo proceso y ejecuta las dos en 45
+situaciones (opciones, `--antes` con todo bien y con distintos fallos,
+`--acceso` encendida y apagada...), con libvirt, ping, el puerto 22, ssh y
+guestfish simulados como en `test_diagnosis_salida.py`, y compara la salida,
+los errores y el código. Se normalizan el nombre (`./ci-diagnosis` es
+`./ssoo-us diagnosis`), la versión, la línea «(Versión en desarrollo.)» y los
+saltos de línea (el nombre nuevo es más largo y los párrafos se parten en otro
+sitio). Tarda unos segundos; con PyYAML:
+
+```bash
+.venv/bin/python tools/equivalencia_diagnosis.py
+```
+
+Hoy son iguales las 45. Los fuentes de `diagnosis` son de `ssoo-us`: se editan
+a mano. Si se corrige algo en `ci-diagnosis` mientras los alumnos lo usan, se
+trae a mano y esta herramienta dice si las dos siguen diciendo lo mismo.
+
+## Para el profesor: `tools/ssoo-us-admin`
+
+Lanza `ssoo-us diagnosis` sobre la cuenta de un alumno, como él (con `sudo`),
+desde el directorio en que trabaja (su silo `<uvus>-imagenesMV`, o
+`~/imagenesMV`): así revisa sus archivos, sus claves y su acceso por ssh tal y
+como los vería él. El programa le llega al alumno por la entrada estándar, así
+que no necesita poder leer el directorio del profesor. Es el
+`ci-diagnosis-admin` de `ci-diagnosis` 1.0.2:
+
+```bash
+tools/ssoo-us-admin alu0000 server1 --acceso
+tools/ssoo-us-admin --actualizar     # baja ssoo-us y ssoo-us-admin de main
+```
+
+`--actualizar` descarga de `raw.githubusercontent.com`: solo funcionará cuando
+el repositorio sea público (o haya otra forma de distribuirlo). Sus tests son
+`tests/test_diagnosis_admin.py`.
 
 ## Lo que conviene saber antes de tocar el código
 
-- **Órdenes externas, solo con `ejecutar()`** (`base.py`): sin teclado (la
+- **`diagnosis` solo lee.** Sus órdenes externas, solo con
+  `ejecutar_lectura()` (lista blanca: `qemu-img`, `ssh-keygen`, `ssh`,
+  `ssh-add`, `ping`, `guestfish`, `virt-cat`, `virt-ls`), y libvirt con
+  `openReadOnly`. Lo comprueban los tests de `test_diagnosis_solo_lee.py`: un
+  fuente de `diagnosis` no puede llamar a nada de `provision`; lo que tengan que
+  compartir (como `IMAGEN_NOBLE`) va en `base.py`.
+- **Cómo se nombra a sí mismo.** `provision` escribe la orden como la llamaron
+  (`orden_provision()`, el `$0` de `ci-provision.sh`); `diagnosis` escribe
+  siempre `./ssoo-us diagnosis`, como `ci-diagnosis` escribía siempre
+  `./ci-diagnosis`: así sus mensajes valen también cuando lo lanza
+  `ssoo-us-admin`, que le pasa el programa por la entrada estándar.
+- **Órdenes externas de `provision`, solo con `ejecutar()`** (`base.py`): sin teclado (la
   entrada es `/dev/null` salvo que se le pase texto), con `LC_ALL=C` (warcry y
   megadeth responden en español) y con `LIBVIRT_DEFAULT_URI=qemu:///system`
   (sin sesión de login, o con la variable heredada, `virsh` se conectaría a
@@ -234,9 +311,6 @@ cuenta como fallo. Son estas:
   mensaje que toque y deshace lo creado en esta ejecución (los dominios se
   registran antes de lanzar `virt-install`; los discos, antes de crearlos),
   salvo que la creación ya esté completa.
-- **Lo que aún no está portado** lanza `NoImplementado`, que `provision()`
-  convierte en el aviso y el código 69. Así una fase se puede cerrar sin dejar
-  a medias lo que viene detrás. En `provision` ya no queda nada.
 - **Orden de recorrido:** bash recorre sus tablas asociativas en el orden de su
   hash; aquí se recorren ordenadas. Solo se nota en el orden de varios motivos
   de «es la imagen base de…» en un mismo mensaje (`filtrar_borrables`).
