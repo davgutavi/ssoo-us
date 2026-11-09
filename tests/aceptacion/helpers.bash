@@ -1,0 +1,126 @@
+# ARCHIVO GENERADO por tools/importar_aceptacion.py a partir de
+# ci-provision/test/helpers.bash (453d651). No lo edite a mano: vuelva a importarlo.
+# Las diferencias con el original están en la lista SUSTITUCIONES del
+# importador.
+# Preparación común de los tests locales: un HOME de mentira con su silo,
+# un virsh y un virt-install simulados, y una red virtual del usuario.
+#
+# Los tests ejecutan el script distribuible (ci-provision.sh), que es lo que
+# usa el alumnado, no los fuentes de src/ y lib/.
+
+ACEPTACION_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
+REPO_DIR="$(cd "$ACEPTACION_DIR/../.." && pwd)"
+MOCKS_DIR="$ACEPTACION_DIR/mocks"
+# El envoltorio: «bash "$SCRIPT" ARGS» ejecuta «ssoo-us provision ARGS»
+SCRIPT="$ACEPTACION_DIR/ssoo-us-provision"
+# Se puede probar otro ejecutable (una copia instalada, por ejemplo)
+export SSOO_US="${SSOO_US:-$REPO_DIR/ssoo-us}"
+# El intérprete, con ruta absoluta: algunos tests cambian el PATH
+export SSOO_US_PYTHON="${SSOO_US_PYTHON:-$(command -v python3)}"
+# Cómo se ve la orden en la salida (en ci-provision.sh, «$0»)
+ORDEN="$SSOO_US provision"
+USUARIO="$(id -un)"
+
+preparar_entorno() {
+    export HOME="$BATS_TEST_TMPDIR/home"
+    export MOCK_STATE="$BATS_TEST_TMPDIR/mock"
+    export PATH="$MOCKS_DIR:$PATH"
+    SILO="$HOME/imagenesMV"
+
+    mkdir -p "$SILO" "$HOME/.ssh" "$MOCK_STATE"
+    echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC0falsa ${USUARIO}@test" > "$HOME/.ssh/id_rsa.pub"
+    # Las dos imágenes cloud ya descargadas (la de Ubuntu es un .img en formato
+    # qcow2, como la real) y la ubuntu-base "del servidor", de 64G como la real
+    qemu-img create -f qcow2 "$SILO/noble-server-cloudimg-amd64.img" 3G >/dev/null
+    qemu-img create -f qcow2 "$SILO/debian12.qcow2" 3G >/dev/null
+    export CI_PROVISION_DIR_COMPARTIDO="$BATS_TEST_TMPDIR/ssoo-shared"
+    UBUNTU_BASE_COMPARTIDA="$CI_PROVISION_DIR_COMPARTIDO/ubuntu-base.qcow2"
+    mkdir -p "$CI_PROVISION_DIR_COMPARTIDO"
+    qemu-img create -f qcow2 "$UBUNTU_BASE_COMPARTIDA" 64G >/dev/null
+
+    # Esperas cortas para que los tests no tarden
+    export CI_PROVISION_WAIT_TIMEOUT=15
+    export CI_PROVISION_POLL_SECS=1
+    export CI_PROVISION_GRACE_SECS=1
+    export CI_PROVISION_SHUTDOWN_TIMEOUT=5
+
+    # Red del usuario, conforme al manual
+    definir_red "${USUARIO}-red" 192.168.7.1 255.255.255.0 192.168.7.128 192.168.7.254
+    echo "192.168.7" > "$MOCK_STATE/dhcp_base"
+}
+
+# definir_red NOMBRE PASARELA MASCARA DHCP_INICIO DHCP_FIN [RESERVA_IP...]
+definir_red() {
+    local nombre="$1" gw="$2" mask="$3" ini="$4" fin="$5"
+    shift 5
+    {
+        echo "<network>"
+        echo "  <name>$nombre</name>"
+        echo "  <forward mode='nat'/>"
+        echo "  <bridge name='virbr9' stp='on' delay='0'/>"
+        echo "  <domain name='$nombre'/>"
+        echo "  <ip address='$gw' netmask='$mask'>"
+        echo "    <dhcp>"
+        echo "      <range start='$ini' end='$fin'/>"
+        local r
+        for r in "$@"; do
+            echo "      <host mac='52:54:00:00:00:01' name='reservada' ip='$r'/>"
+        done
+        echo "    </dhcp>"
+        echo "  </ip>"
+        echo "</network>"
+    } > "$MOCK_STATE/red-$nombre.xml"
+    echo "$nombre" >> "$MOCK_STATE/redes.txt"
+}
+
+# Un dominio que no ha creado el script (a mano, de otro usuario...)
+# definir_dominio NOMBRE ESTADO DISCO...
+definir_dominio() {
+    local nombre="$1" estado="$2"
+    shift 2
+    mkdir -p "$MOCK_STATE/dominios/$nombre"
+    echo "$estado" > "$MOCK_STATE/dominios/$nombre/estado"
+    printf '%s\n' "$@" > "$MOCK_STATE/dominios/$nombre/discos"
+    echo "192.168.7.99" > "$MOCK_STATE/dominios/$nombre/ip"
+}
+
+quitar_red() {
+    rm -f "$MOCK_STATE/red-$1.xml"
+    grep -vx "$1" "$MOCK_STATE/redes.txt" > "$MOCK_STATE/redes.tmp" || true
+    mv "$MOCK_STATE/redes.tmp" "$MOCK_STATE/redes.txt"
+}
+
+# Número de veces que se ha invocado un comando del mock (por patrón)
+llamadas() {
+    grep -c -- "$1" "$MOCK_STATE/log" 2>/dev/null || true
+}
+
+dominio_existe() {
+    [[ -d "$MOCK_STATE/dominios/$1" ]]
+}
+
+# Ejecuta un comando con una pseudoterminal y, cuando su salida contiene PATRON,
+# le escribe RESPUESTA (para probar las confirmaciones por teclado)
+con_terminal() {   # PATRON RESPUESTA COMANDO...
+    python3 - "$@" <<'PY'
+import os, pty, sys
+patron = sys.argv[1].encode(); resp = sys.argv[2].encode(); cmd = sys.argv[3:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(cmd[0], cmd)
+out = b''; pendiente = True
+while True:
+    try:
+        datos = os.read(fd, 4096)
+    except OSError:
+        break
+    if not datos:
+        break
+    out += datos
+    if pendiente and patron in out:
+        os.write(fd, resp + b'\n'); pendiente = False
+_, estado = os.waitpid(pid, 0)
+sys.stdout.write(out.decode('utf-8', 'replace'))
+sys.exit(os.WEXITSTATUS(estado) if os.WIFEXITED(estado) else 1)
+PY
+}

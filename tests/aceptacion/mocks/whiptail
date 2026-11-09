@@ -1,0 +1,30 @@
+#!/bin/bash
+# whiptail simulado para los tests del asistente. Responde con las líneas del
+# fichero $MOCK_WHIPTAIL, una por invocación, y las va consumiendo:
+#   "0 valor"  acepta con ese valor (lo escribe por stderr, como whiptail)
+#   "0"        acepta sin valor (--yesno, --msgbox)
+#   "1"        cancela
+# Si se acaban las respuestas, cancela.
+S="${MOCK_STATE:?MOCK_STATE no definido}"
+echo "whiptail $*" >> "$S/log"
+
+# Como el whiptail real: sin locale UTF-8 los textos con tildes salen cortados
+case "${LC_ALL:-}" in
+    *UTF-8*|*utf-8*|*utf8*|*UTF8*) ;;
+    *) echo "mock whiptail: se ha llamado sin locale UTF-8 (LC_ALL='${LC_ALL:-}')" >&2; exit 99 ;;
+esac
+
+f="${MOCK_WHIPTAIL:-}"
+if [[ -z "$f" || ! -s "$f" ]]; then
+    exit 1
+fi
+linea="$(head -n1 "$f")"
+tail -n +2 "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+
+rc="${linea%% *}"
+val="${linea#"$rc"}"
+val="${val# }"
+if [[ -n "$val" ]]; then
+    printf '%s' "$val" >&2
+fi
+exit "$rc"

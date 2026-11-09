@@ -1,0 +1,8 @@
+#!/bin/bash
+# Envoltorio para los tests de aceptación: «bash ssoo-us-provision ARGS»
+# ejecuta «ssoo-us provision ARGS». Así los tests de ci-provision.sh, que
+# lanzan «bash "$SCRIPT" ARGS», prueban ssoo-us sin cambiar ni una línea.
+# SSOO_US y SSOO_US_PYTHON los fija helpers.bash; sin ellos, el ssoo-us de
+# este repositorio con el python3 del PATH.
+aqui="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${SSOO_US_PYTHON:-python3}" "${SSOO_US:-$aqui/../../ssoo-us}" provision "$@"

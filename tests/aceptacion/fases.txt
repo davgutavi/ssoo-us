@@ -1,0 +1,165 @@
+# Fases del port de ci-provision: qué tests de aceptación debe pasar cada una.
+# Una línea por test: FASE<TAB>nombre del test (exactamente el de ci-provision.bats).
+# Las fases son acumulativas: «bash tools/aceptacion.sh --fase 3» lanza los de 1, 2 y 3.
+#   0  los dos que se omiten en ssoo-us (skip)
+#   1  línea de órdenes: opciones, ayuda, --version y errores 10-16 y 20
+#   2  entorno y --dry-run: libvirt, silo, clave, red, IPs, imagen, conflictos,
+#      ficheros cloud-init y plan; no crea nada
+#   3  máquina suelta: descarga, discos, virt-install, espera, expulsión del
+#      medio, reinicio en frío, resumen, --limpiar y rollback
+#   4  GlusterFS: --glusterfs y --gluster-cluster
+#   5  --listar, --eliminar y --eliminar-todo
+#   6  asistente (--menu)
+0	ci-provision.sh está al día respecto a src/ y lib/
+0	auditoría 18: los fuentes funcionan sin generar el script (src/main.sh carga todas las librerías)
+1	muestra la ayuda con -h y con --help
+1	sin parámetros: error 10 con la sintaxis
+1	la sintaxis antigua (4 posicionales) da error 10 y lo explica
+1	las opciones antiguas dan error 12 y explican el cambio
+1	opción desconocida: error 12
+1	opción sin valor: error 11
+1	nombre de máquina inválido: error 20
+1	RAM y vCPUs no válidas: error 13
+1	tamaño de disco no válido: error 15
+1	nombre de disco con ruta: error 16
+1	contraseña con caracteres no ASCII: error 14
+1	--gluster-cluster no admite MAQUINA ni --disco
+1	--prefijo no válido: error 20; sin valor: error 11
+1	opciones con valor: sin valor, con valor vacío o con '=' se explican (11/12)
+1	el nombre de máquina no debe llevar el usuario delante: error 20
+1	--version muestra la versión
+1	nombre de máquina de más de 63 caracteres: error 20
+2	sin conexión con libvirt: error 38
+2	sin silo: error 30
+2	sin imagen base y --dry-run: avisa de que la descargaría, sin descargar
+2	imagen base existente que no es un qcow2: error 37 y NO se toca
+2	sin clave pública: error 31
+2	elige USUARIO-red por defecto
+2	si la única red del usuario tiene otro sufijo, la usa
+2	una red llamada exactamente como el usuario también vale
+2	la búsqueda no distingue mayúsculas
+2	con varias redes del usuario, prefiere USUARIO-red
+2	con varias redes del usuario y ninguna llamada USUARIO-red: error 44
+2	las redes de otros usuarios no cuentan
+2	--red con una red inexistente: error 40
+2	--red permite usar cualquier red existente
+2	red inactiva: error 45 con el comando para activarla
+2	IP libre: aceptada
+2	IP dentro del rango DHCP: error 42 con las IPs libres
+2	IP que es la pasarela, de red, de difusión o de otra subred: error 41
+2	IP mal formada: error 41
+2	IP reservada por MAC fuera del rango DHCP: error 42
+2	red con pasarela en .254 y DHCP en .1-.253 (topología de un profesor)
+2	--dry-run no crea nada y muestra el comando
+2	--dry-run con --limpiar solo enumera lo que se eliminaría
+2	ubuntu-base: no se admite en una máquina suelta, y si no está, error 39
+2	combinaciones incompatibles: error 10 (y --disco igual a un disco extra: 16)
+2	clave pública con dos claves, vacía o que no lo es: error 31
+2	--tam menor que la imagen de partida: error 15
+2	--base: la variante de SO y el estilo de administrador se deducen de la imagen
+2	red definida sin máscara ni prefijo: se asume la de su clase
+2	--red con un nombre inválido: error 40; una IP mal formada enseña las IPs libres
+2	red definida con prefix= en vez de netmask=, y red sin bloque IPv4 (error 43)
+2	clúster en --dry-run: plan de dos fases y sin efectos
+2	clúster con --base inexistente o que no es qcow2: error 39
+2	--base no puede ser uno de los discos que se van a crear
+2	clúster: --ram y --vcpus sobrescriben los valores por nodo
+2	auditoría 8: --base con la cadena rota (39), sin imagen reconocible (aviso) o con --imagen
+2	auditoría 9: una clave pública con ': ' en el comentario va entre comillas en el YAML
+2	auditoría 10: si el DHCP ocupa .10-.13, el clúster propone --ip-inicial, que funciona
+2	auditoría 14: números con ceros a la izquierda se leen en decimal
+2	auditoría 15: una red con DHCPv6 no rompe nada
+2	auditoría 19: las variables de entorno de espera llevan prefijo y se validan
+2	auditoría 20: el instance-id es nuevo en cada creación
+3	sin imagen base: la descarga y continúa
+3	--imagen debian12: descarga la imagen de Debian si falta y declara la variante debian12
+3	la descarga se hace después de las demás validaciones
+3	descarga fallida: error 37 con el comando manual y sin restos
+3	descarga corrupta (portal cautivo): error 37 y se elimina lo descargado
+3	máquina básica con DHCP
+3	user-data por defecto: root con contraseña de consola, administrador sin ella, SSH solo por clave
+3	--no-root: root sin contraseña; sin --ssh-pass no hay chpasswd
+3	--no-virt-viewer: sin consola gráfica, y no se sugiere virt-viewer
+3	--no-root con --ssh-pass: solo administrador tiene contraseña
+3	--base en una máquina suelta: copia COW de esa imagen, sin descargar nada
+3	--ssh-pass activa el SSH por contraseña con la contraseña elegida
+3	IP fija y --extra-disks: 7 discos en orden y network-config con routes
+3	--disco y --tam cambian el nombre y el tamaño del disco principal
+3	--prefijo: dominio y discos con prefijo; lo de tu usuario no se toca ni con --limpiar
+3	si virt-install falla después de definir el dominio, el rollback también lo elimina
+3	sin --tam, el disco toma el tamaño de la imagen de partida si es mayor que 40G
+3	una máquina llamada como una imagen cloud: error 10 sin hablar de --base, ni con --limpiar
+3	confirmación por teclado de --limpiar: 'n' cancela sin tocar nada; 's' elimina y sigue
+3	--ssh-pass -: la contraseña se pide por teclado; sin terminal, error 11
+3	--tam admite minúsculas; cloud-init 'degraded done' cuenta como terminado con errores
+3	un conflicto se detecta antes de descargar la imagen base
+3	si cloud-init no termina pero el agente ya da la IP, el aviso y el resumen la muestran
+3	sin wget se descarga con curl
+3	el agente puede tardar en devolver el resultado de cloud-init status
+3	si --limpiar no consigue eliminar el dominio: error 21 con el comando
+3	si no se consigue expulsar el medio de cloud-init, se avisa y se termina bien
+3	domifaddr con varias interfaces: se toma la IPv4 que no es loopback
+3	aviso de known_hosts cuando la IP ya figura con otra clave
+3	--ram y --vcpus llegan a virt-install
+3	--no-wait no consulta al agente ni expulsa el medio
+3	si el disco ya existe: error 21 con instrucciones y sin crear nada
+3	si el dominio ya existe: error 21 con el undefine
+3	--limpiar elimina exactamente lo que va a crear y sigue
+3	si virt-install falla: lo dice, borra los discos que había creado y no deja dominio
+3	un error de validación no deja rastro
+3	espera aunque el agente tarde en responder
+3	no da la máquina por lista mientras cloud-init siga en marcha
+3	si el agente no permite consultar cloud-init, se asume lista y se avisa
+3	si cloud-init termina con error, lo dice pero no aborta
+3	si se agota el tiempo: aviso, sin expulsar el medio, y el resumen igualmente
+3	auditoría 11: una IP fija que ya tiene otra máquina, o que responde a ping, se rechaza
+3	auditoría 12: --base no admite el disco de una máquina apagada
+3	auditoría 25: el rollback quita también los ficheros cloud-init
+3	auditoría 26: si la ISO sigue también en la definición persistente, se expulsa de las dos
+3	reinicio en frío: la máquina acaba con on_reboot=restart en la definición en ejecución
+3	reinicio en frío: no se hace si cloud-init no ha terminado (--no-wait o tiempo agotado), y se avisa
+3	reinicio en frío: si la máquina no se apaga, se avisa y no se da por fallida
+4	--glusterfs: paquetes, orden de runcmd, y al final solo queda el disco
+4	--glusterfs --imagen ubuntu-base: copia completa de ubuntu-base, administrador como en ella
+4	--glusterfs --no-root con ubuntu-base: se bloquea la contraseña que trae root
+4	--glusterfs no admite --no-wait
+4	--glusterfs: si cloud-init falla, error 71 y la máquina se conserva para examinarla
+4	--glusterfs: si no se puede consultar cloud-init, no se asume; error 70 y rollback
+4	--prefijo con --gluster-cluster: base y nodos con prefijo, hostnames intactos
+4	--limpiar se niega a borrar un disco que usa otra máquina o que es respaldo de otra copia
+4	si falla un nodo del clúster, se deshacen los nodos pero la base recién construida se conserva
+4	--tam se aplica a la base y a los nodos del clúster; las opciones de acceso llegan al resumen
+4	clúster desde ubuntu-base: --tam menor que 64G no vale; uno mayor amplía la copia y los nodos
+4	--glusterfs a partir de otra base (--base) y clúster con --prefijo y --base
+4	clúster completo: base, apagado, 4 nodos con IP fija, discos y cloud-init propio
+4	clúster con --discos-nodo 7: los siete discos de crea-entorno.sh, solo tres formateados
+4	clúster con --imagen debian12: la base es copia COW de Debian y administrador como en SERVER1
+4	clúster: conflicto con un disco de un nodo, y --limpiar lo resuelve
+4	clúster con --base: se omite la fase 1 y --limpiar no toca la imagen base
+4	clúster: si las IPs .10-.13 caen en el DHCP de la red, error 42 antes de crear nada
+4	clúster: si la base no se apaga, error 70 y rollback de la base
+4	clúster: si cloud-init falla en la base, error 71, la base se conserva y no hay nodos
+4	clúster con --no-wait: espera a la base pero no a los nodos
+4	auditoría 7: cloud-init terminado con avisos (código 2) no se da por bueno en la base GlusterFS
+4	auditoría 16, 17 y 22: mensajes de --user-pass, de la base que ya existe y de la clave pública
+4	auditoría 23: los nodos de ubuntu-base avisan de la contraseña común
+4	reinicio en frío: también en los cuatro nodos del clúster
+5	--listar: máquinas con estado, IP y discos, y discos del silo sin máquina
+5	--eliminar MAQUINA: máquina, discos y cloud-init; lo demás intacto
+5	--eliminar conserva un disco que usa otra máquina o del que dependen copias
+5	--eliminar-todo: todas las máquinas del usuario y los discos sin máquina; nunca las imágenes cloud ni otro prefijo
+5	auditoría 1: --eliminar-todo no borra la imagen base de una copia que se conserva (aunque sea indirecta)
+5	auditoría 1: --eliminar conserva la base de un disco que se queda porque lo usa otra máquina
+5	auditoría 2: sin terminal y sin --si no se elimina nada (error 23); libvirt del sistema
+5	auditoría 3: --eliminar y --limpiar no borran un disco que usa una máquina con otro nombre
+5	auditoría 4: con --prefijo no se tocan las máquinas de otro usuario que se llamen igual
+5	auditoría 24: la descarga se comprueba con la suma publicada; la copia compartida evita descargar
+5	auditoría 13: --listar lee cada disco del silo una sola vez
+6	--menu: el asistente construye el comando, lo ejecuta y vuelve al menú
+6	--menu: el clúster deja elegir la imagen de la base y los discos de crea-entorno.sh
+6	--menu: cancelar en el menú principal no hace nada
+6	--menu: almacenamiento extra pide el nombre, sugiere la IP .2 y marca los discos; eliminar elige de la lista
+6	--menu: la lista gráfica muestra máquinas y discos sueltos, con ficha al elegir
+6	--menu: la contraseña no se muestra en el comando; sin whiptail, error 38; sin más opciones
+6	auditoría 5 y 6: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes
+6	auditoría 21: el asistente rechaza nombres que empiezan por '-' y la ficha respeta --prefijo

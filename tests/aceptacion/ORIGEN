@@ -1,0 +1,3 @@
+Importado de ci-provision 453d651.
+Tests: 153 (2 con skip en ssoo-us).
+Mocks: curl, descarga-comun, ping, virsh, virt-install, wget, whiptail.

@@ -1,0 +1,89 @@
+#!/bin/bash
+# virt-install simulado para los tests locales (sin libvirt).
+# Crea el dominio en $MOCK_STATE/dominios/NOMBRE con lo que le llega.
+#
+#   MOCK_VIRT_INSTALL_FALLA=1        falla sin crear nada, como si libvirt diera error
+#   MOCK_VIRT_INSTALL_FALLA_TARDE=1  define el dominio y luego falla (error tardío o Ctrl+C)
+#   MOCK_VIRT_INSTALL_FALLA_EN=N     falla (sin crear nada) en la llamada número N
+#   MOCK_ISO_PERSISTENTE=1           la ISO de cloud-init queda también en la definición persistente
+
+S="${MOCK_STATE:?MOCK_STATE no definido}"
+mkdir -p "$S/dominios"
+echo "virt-install $*" >> "$S/log"
+
+if [[ -n "${MOCK_VIRT_INSTALL_FALLA:-}" ]]; then
+    echo "ERROR    error simulado de virt-install" >&2
+    exit 1
+fi
+n=$(( $(cat "$S/virt_install_n" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$S/virt_install_n"
+if [[ -n "${MOCK_VIRT_INSTALL_FALLA_EN:-}" && "$n" == "$MOCK_VIRT_INSTALL_FALLA_EN" ]]; then
+    echo "ERROR    error simulado de virt-install (llamada $n)" >&2
+    exit 1
+fi
+
+nombre=""
+discos=()
+netcfg=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --name)   nombre="$2"; shift 2 ;;
+        --disk)
+            d="${2#path=}"
+            discos+=( "${d%%,*}" )
+            shift 2 ;;
+        --cloud-init)
+            IFS=, read -r -a partes <<< "$2"
+            for p in "${partes[@]}"; do
+                [[ "$p" == network-config=* ]] && netcfg="${p#network-config=}"
+            done
+            shift 2 ;;
+        --ram|--vcpus|--os-variant|--network|--graphics) shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+if [[ -z "$nombre" ]]; then
+    echo "ERROR    falta --name" >&2
+    exit 1
+fi
+
+if [[ -d "$S/dominios/$nombre" ]]; then
+    echo "ERROR    Guest name '$nombre' is already in use." >&2
+    exit 1
+fi
+
+for d in "${discos[@]}"; do
+    if [[ ! -f "$d" ]]; then
+        echo "ERROR    el disco no existe: $d" >&2
+        exit 1
+    fi
+done
+
+dir="$S/dominios/$nombre"
+mkdir -p "$dir"
+echo "running" > "$dir/estado"
+printf '%s\n' "${discos[@]}" > "$dir/discos"
+touch "$dir/iso"
+# Como el virt-install real con --cloud-init: arranca con la definición de
+# instalación, que tiene on_reboot=destroy (la persistente tiene restart)
+echo destroy > "$dir/on_reboot_vivo"
+if [[ -n "${MOCK_ISO_PERSISTENTE:-}" ]]; then touch "$dir/iso_persistente"; fi
+
+# IP: la fija del network-config, o una "de DHCP"
+ip=""
+if [[ -n "$netcfg" && -f "$netcfg" ]]; then
+    ip="$(sed -n 's/^ *- \([0-9.]*\)\/[0-9]*$/\1/p' "$netcfg" | head -n1)"
+fi
+if [[ -z "$ip" ]]; then
+    n="$(ls "$S/dominios" | wc -l | tr -d ' ')"
+    ip="$(cat "$S/dhcp_base" 2>/dev/null || echo 192.168.7).$(( 200 + n ))"
+fi
+echo "$ip" > "$dir/ip"
+
+if [[ -n "${MOCK_VIRT_INSTALL_FALLA_TARDE:-}" ]]; then
+    echo "ERROR    error simulado de virt-install tras definir el dominio" >&2
+    exit 1
+fi
+
+exit 0

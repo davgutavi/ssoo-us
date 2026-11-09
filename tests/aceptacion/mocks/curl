@@ -1,0 +1,13 @@
+#!/bin/bash
+# curl simulado: la alternativa a wget para descargar la imagen base (mismas
+# variables MOCK_* que el mock de wget).
+#   MOCK_CURL_FALLA=1  falla como si no hubiera conexión
+S="${MOCK_STATE:?}"
+echo "curl $*" >> "$S/log"
+if [[ -n "${MOCK_CURL_FALLA:-}" ]]; then
+    echo "curl: (6) Could not resolve host" >&2
+    exit 6
+fi
+# Los tests pueden llamarlo a través de un enlace simbólico
+orig="$0"; if [[ -L "$orig" ]]; then orig="$(readlink "$orig")"; fi
+source "$(dirname "$orig")/descarga-comun"

@@ -1,0 +1,12 @@
+#!/bin/bash
+# wget simulado: "descarga" la imagen base creando un qcow2 pequeño, y el
+# fichero de sumas (SHA256SUMS / SHA512SUMS) con la suma de lo último descargado.
+#   MOCK_WGET_FALLA=1     falla como si no hubiera conexión
+#   MOCK_WGET_CORRUPTO=1  entrega una página HTML en vez de la imagen
+#   MOCK_SUMAS_FALLA=1    no se puede descargar el fichero de sumas
+#   MOCK_SUMAS_MAL=1      el fichero de sumas no coincide con lo descargado
+S="${MOCK_STATE:?}"
+echo "wget $*" >> "$S/log"
+# Los tests pueden llamarlo a través de un enlace simbólico
+orig="$0"; if [[ -L "$orig" ]]; then orig="$(readlink "$orig")"; fi
+source "$(dirname "$orig")/descarga-comun"
