@@ -110,7 +110,11 @@ algo que no sea de lectura). Vienen de los de `ci-diagnosis` 1.0.2; además:
   suyo, lo que `base.py` comparte a propósito (lista `COMPARTIDO`) y Python.
 - `test_diagnosis_cruzado.py`: lo que genera `provision` (máquina suelta, con
   `--ssh-pass`, con `--extra-disks`, GlusterFS y nodo del clúster) no da ningún
-  ERROR en `diagnosis`.
+  ERROR en `diagnosis`. No es que `diagnosis` revise máquinas de `provision`:
+  `diagnosis` es para la creación manual (manual, sección 5.4), y busca los
+  archivos en el silo (`user-data`, `meta-data`, `network-config`), no en el
+  `cloudinit-<máquina>/` de `provision`. El test comprueba que los dos siguen
+  las mismas convenciones (usuario, clave, interfaz, DNS, `routes:`).
 
 Ningún test ni ejemplo puede llevar un UVUS real: el alumno de prueba es
 `alu0000`.

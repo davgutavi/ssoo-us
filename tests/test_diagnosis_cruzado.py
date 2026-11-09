@@ -1,6 +1,11 @@
 """provision genera y diagnosis revisa: lo que genera provision no puede dar
 ningún ERROR en diagnosis.
 
+diagnosis es para la creación manual (manual, sección 5.4) y no revisa las
+máquinas de provision (busca los archivos en el silo, no en su
+cloudinit-<máquina>/): este test solo comprueba que los dos siguen las mismas
+convenciones (usuario, clave, interfaz, DNS, routes:).
+
 El único AVISO que se admite es el del instance-id: provision le añade la
 fecha (para que cloud-init vuelva a configurar un disco de partida que ya
 fue una máquina con el mismo nombre), y diagnosis espera <uvus>-<máquina>,
