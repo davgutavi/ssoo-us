@@ -33,10 +33,6 @@ def no_implementado(subcomando):
     return NO_IMPLEMENTADO
 
 
-def provision(argv):
-    return no_implementado("provision")
-
-
 def diagnosis(argv):
     return no_implementado("diagnosis")
 
@@ -45,7 +41,9 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     for flujo in (sys.stdout, sys.stderr):
         try:
-            flujo.reconfigure(encoding="utf-8", errors="replace")
+            # Por líneas: así la salida y los errores se mezclan en el orden en que
+            # se escriben, como en bash
+            flujo.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
         except (AttributeError, ValueError):
             pass
     if not argv:

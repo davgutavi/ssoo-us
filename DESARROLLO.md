@@ -5,9 +5,10 @@ asignatura, no necesitas nada de esto: lee el [README](README.md).
 
 `ssoo-us` sustituirá a `ci-provision.sh` (subcomando `provision`) y a
 `ci-diagnosis` (subcomando `diagnosis`), con la misma interfaz, los mismos
-mensajes y los mismos códigos de salida que cada uno. Mientras se porta, los dos
-subcomandos responden «todavía no está implementado» con el código 69, que no
-usa ninguna de las dos herramientas.
+mensajes y los mismos códigos de salida que cada uno. Mientras se porta, lo que
+falta responde «todavía no está implementado» con el código 69, que no usa
+ninguna de las dos herramientas: `diagnosis` entero y, en `provision`, todo lo
+que viene después de validar la línea de órdenes (fase 1 del port, hecha).
 
 ## Estructura
 
@@ -16,6 +17,8 @@ código vive en `src/`, en fragmentos de un único programa:
 
 ```
 src/base.py       Importaciones, versión y ejecutar() (órdenes externas)
+src/imagenes.py   provision: imágenes de partida (--imagen)
+src/provision.py  provision: configuración, opciones, validaciones, ayuda y flujo
 src/main.py       Despachador de subcomandos, --version y -h
 ```
 
@@ -126,8 +129,8 @@ Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy fallan todos (151, por «todavía no está implementado») salvo los dos
-omitidos. Para comprobar el propio arnés se puede lanzar contra
+Hoy pasan los de la fase 1 y fallan los demás (por «todavía no está
+implementado»). Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
 menos los seis que dependen de las sustituciones de `$ORDEN` y de `--version`.
@@ -136,6 +139,22 @@ Los tests de `ci-provision` leen variables de entorno con el prefijo
 `CI_PROVISION_` (tiempos de espera, directorio compartido, clave pública, URI de
 libvirt); `ssoo-us provision` las lee con los mismos nombres.
 
+### Pruebas de equivalencia con `ci-provision.sh`
+
+Los tests de bats solo miran trozos de la salida. `tools/equivalencia.py` lanza
+las mismas órdenes con `ci-provision.sh` y con `ssoo-us provision` y compara la
+salida, los errores y el código enteros, cambiando solo la orden (`$0`) y la
+línea de la versión:
+
+```bash
+python3 tools/equivalencia.py --fase 1        # con ../ci-provision/ci-provision.sh
+python3 tools/equivalencia.py RUTA/ci-provision.sh
+```
+
+Necesita un bash 4 o posterior en el `PATH` (en macOS, el de Homebrew). Cada caso
+lleva la fase a partir de la cual tiene que coincidir; al portar una fase se
+añaden sus casos.
+
 ## Lo que conviene saber antes de tocar el código
 
 - **Órdenes externas, solo con `ejecutar()`** (`base.py`): sin teclado (la
@@ -143,6 +162,17 @@ libvirt); `ssoo-us provision` las lee con los mismos nombres.
   megadeth responden en español) y con `LIBVIRT_DEFAULT_URI=qemu:///system`
   (sin sesión de login, o con la variable heredada, `virsh` se conectaría a
   `qemu:///session` y no vería ninguna máquina).
+- **Errores de `provision`:** `fallar(código, mensaje)` lanza `ErrorProvision`,
+  que `provision()` convierte en «ERROR [código] mensaje» por la salida de
+  errores y en el código de salida, como `error` en `ci-provision.sh`. La ayuda
+  y `--version` terminan con `FinProvision(0)`. En los mensajes, la orden es
+  `orden_provision()` («./ssoo-us provision»), donde `ci-provision.sh` ponía `$0`.
+- **Salida por líneas:** `main()` pone la salida y los errores en modo
+  `line_buffering`, para que se mezclen en el mismo orden que en bash.
+- **Como bash con `LC_ALL=C`:** los nombres, el tamaño y los números se validan
+  solo con caracteres ASCII (`re.fullmatch` con clases `[A-Za-z0-9]`, nunca
+  `\w` ni `str.isdigit`), y `decimal()` solo admite cifras (`int()` aceptaría
+  espacios, `+` o `1_0`).
 - **Códigos de salida.** Los de `provision` son los de `ci-provision.sh` (10 a
   45, 70 y 71); los de `diagnosis`, los de `ci-diagnosis` (0, 1 y 2). `ssoo-us`
   sin subcomando, o con uno que no existe, sale con 2.

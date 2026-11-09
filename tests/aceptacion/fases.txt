@@ -29,6 +29,7 @@
 1	el nombre de máquina no debe llevar el usuario delante: error 20
 1	--version muestra la versión
 1	nombre de máquina de más de 63 caracteres: error 20
+1	--glusterfs no admite --no-wait
 2	sin conexión con libvirt: error 38
 2	sin silo: error 30
 2	sin imagen base y --dry-run: avisa de que la descargaría, sin descargar
@@ -122,7 +123,6 @@
 4	--glusterfs: paquetes, orden de runcmd, y al final solo queda el disco
 4	--glusterfs --imagen ubuntu-base: copia completa de ubuntu-base, administrador como en ella
 4	--glusterfs --no-root con ubuntu-base: se bloquea la contraseña que trae root
-4	--glusterfs no admite --no-wait
 4	--glusterfs: si cloud-init falla, error 71 y la máquina se conserva para examinarla
 4	--glusterfs: si no se puede consultar cloud-init, no se asume; error 70 y rollback
 4	--prefijo con --gluster-cluster: base y nodos con prefijo, hostnames intactos

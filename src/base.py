@@ -9,8 +9,12 @@ Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 """
 
 import os
+import pwd
+import re
+import shutil
 import subprocess
 import sys
+import termios
 
 VERSION = "0.1.0-dev"
 PROGRAMA = "ssoo-us"

@@ -46,15 +46,19 @@ class TestDespachador(unittest.TestCase):
         self.assertEqual(codigo, 2)
         self.assertIn("opción desconocida: --listar", errores)
 
-    def test_subcomandos_no_implementados(self):
-        # Hasta que se porten: un código que no usan ci-provision ni ci-diagnosis
-        for subcomando in su.SUBCOMANDOS:
-            for resto in ((), ("server1",), ("-h",), ("--version",)):
-                codigo, salida, errores = lanzar(subcomando, *resto)
-                self.assertEqual(codigo, su.NO_IMPLEMENTADO, (subcomando, resto))
-                self.assertEqual(salida, "")
-                self.assertRegex(errores, re.escape("ssoo-us %s: todavía no está implementado"
-                                                    % subcomando))
+    def test_diagnosis_no_implementado(self):
+        # Hasta que se porte: un código que no usan ci-provision ni ci-diagnosis
+        for resto in ((), ("server1",), ("-h",), ("--version",)):
+            codigo, salida, errores = lanzar("diagnosis", *resto)
+            self.assertEqual(codigo, su.NO_IMPLEMENTADO, resto)
+            self.assertEqual(salida, "")
+            self.assertRegex(errores, re.escape("ssoo-us diagnosis: todavía no está implementado"))
+
+    def test_provision_no_implementado_tras_las_opciones(self):
+        # Fase 1: las opciones se validan; lo que sigue aún no está portado
+        codigo, salida, errores = lanzar("provision", "--dry-run", "server1")
+        self.assertEqual(codigo, su.NO_IMPLEMENTADO)
+        self.assertIn("ssoo-us provision: todavía no está implementado", errores)
 
     def test_no_implementado_no_choca_con_otros_codigos(self):
         ci_provision = set(range(10, 46)) | {70, 71}
