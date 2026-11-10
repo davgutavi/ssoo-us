@@ -1,16 +1,16 @@
 # --- Programa principal --------------------------------------------------------
 
 USO = """\
-Uso: ./ssoo-us SUBCOMANDO [opciones]
+Uso: ssoo-us SUBCOMANDO [opciones]
 
 Herramientas de la asignatura Sistemas Operativos (Universidad de Sevilla)
 para las máquinas virtuales de los servidores de la asignatura.
 
 Subcomandos:
   provision   crea máquinas virtuales con cloud-init (sustituye a
-              ci-provision.sh). Su ayuda: ./ssoo-us provision -h
+              ci-provision.sh). Su ayuda: ssoo-us provision -h
   diagnosis   revisa la construcción de una máquina y dice qué falla
-              (sustituye a ci-diagnosis). Su ayuda: ./ssoo-us diagnosis -h
+              (sustituye a ci-diagnosis). Su ayuda: ssoo-us diagnosis -h
 
 Opciones:
   --version   muestra la versión.
@@ -22,9 +22,22 @@ Código de salida: el del subcomando; 2 si la orden está mal escrita.
 SUBCOMANDOS = ("provision", "diagnosis")
 
 
+def ruta_del_programa():
+    """El archivo del programa, tal y como se lanzó (para volver a lanzarlo)."""
+    return sys.argv[0] if sys.argv and sys.argv[0] not in ("", "-") else PROGRAMA
+
+
 def nombre_programa():
-    """Cómo se ha llamado al programa, para los mensajes (./ssoo-us, ssoo-us...)."""
-    return sys.argv[0] if sys.argv and sys.argv[0] else PROGRAMA
+    """Cómo se ha llamado al programa, para los mensajes: como el alumno lo
+    escribió (./ssoo-us, ~/bin/ssoo-us...), salvo si lo encontró en el PATH
+    (instalado en /usr/local/bin): entonces, sin la ruta («ssoo-us»), aunque
+    Python reciba la ruta completa."""
+    ruta = ruta_del_programa()
+    nombre = os.path.basename(ruta)
+    en_el_path = shutil.which(nombre)
+    if en_el_path and os.path.realpath(en_el_path) == os.path.realpath(ruta):
+        return nombre
+    return ruta
 
 
 def main(argv=None):

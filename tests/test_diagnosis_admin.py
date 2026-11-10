@@ -37,10 +37,10 @@ class TestArgumentos(unittest.TestCase):
         self.assertEqual(adm.analizar_argumentos([]), ("ayuda",))
         self.assertEqual(adm.analizar_argumentos(["--ayuda"]), ("ayuda",))
 
-    def test_actualizar(self):
-        self.assertEqual(adm.analizar_argumentos(["--actualizar"]), ("actualizar",))
+    def test_sin_actualizar(self):
+        # ssoo-us se instala en el servidor: ya no se descarga
         with self.assertRaises(adm.ErrorDeUso):
-            adm.analizar_argumentos(["--actualizar", UVUS])
+            adm.analizar_argumentos(["--actualizar"])
 
     def test_alumno_y_resto_tal_cual(self):
         self.assertEqual(adm.analizar_argumentos([UVUS, "server2", "--acceso", "--ip", "1.2.3.4"]),
@@ -115,18 +115,21 @@ class TestDirectorio(unittest.TestCase):
 
 class TestOrden(unittest.TestCase):
     def test_orden_sudo(self):
-        orden = adm.orden_sudo(UVUS, "/home/alu0000/imagenesMV", ["server1", "--acceso"])
+        orden = adm.orden_sudo(UVUS, "/home/alu0000/imagenesMV", ["server1", "--acceso"],
+                               "/usr/local/bin/ssoo-us")
         self.assertEqual(orden[:6], ["sudo", "-u", UVUS, "-H", "--", "/bin/bash"])
-        self.assertEqual(orden[-4:], ["ssoo-us", "/home/alu0000/imagenesMV",
+        self.assertEqual(orden[-4:], ["/usr/local/bin/ssoo-us", "/home/alu0000/imagenesMV",
                                       "server1", "--acceso"])
 
     def test_el_lanzador_entra_en_el_directorio_y_pasa_los_argumentos(self):
-        # El lanzador, sin sudo y con un programa de prueba por la entrada estándar
+        # El lanzador, sin sudo y con un programa de prueba en lugar de ssoo-us
         with tempfile.TemporaryDirectory() as d:
+            prueba = os.path.join(d, "prueba.py")
+            with open(prueba, "w") as f:
+                f.write("import os, sys; print(os.getcwd()); print(sys.argv[1:])\n")
             lanzador = adm.LANZADOR.replace("/usr/bin/python3", shlex.quote(sys.executable))
-            r = subprocess.run(["/bin/bash", "-c", lanzador, "ssoo-us", d, "a b", "--x"],
-                               input=b"import os, sys; print(os.getcwd()); print(sys.argv[1:])",
-                               stdout=subprocess.PIPE)
+            r = subprocess.run(["/bin/bash", "-c", lanzador, prueba, d, "a b", "--x"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
             salida = r.stdout.decode().splitlines()
             self.assertEqual(os.path.realpath(salida[0]), os.path.realpath(d))
             self.assertEqual(salida[1], "['diagnosis', 'a b', '--x']")
@@ -144,10 +147,35 @@ class TestOrden(unittest.TestCase):
         self.assertEqual(codigo, 1)
         orden = run.call_args[0][0]
         self.assertEqual(orden[2], UVUS)
-        self.assertEqual(orden[-2:], ["/home/%s" % UVUS, "server1"])
-        self.assertEqual(run.call_args[1]["stdin"].name, comun.SCRIPT)
+        self.assertEqual(orden[-3:], [comun.SCRIPT, "/home/%s" % UVUS, "server1"])
         self.assertIn("Alumno: %s" % UVUS, salida.getvalue())
         self.assertTrue(conn.cerrada)
+
+    def test_que_ssoo_us_usa(self):
+        with tempfile.TemporaryDirectory() as d:
+            ruta = os.path.join(d, "ssoo-us")
+            with open(ruta, "w") as f:
+                f.write("#!/usr/bin/python3\n")
+            os.chmod(ruta, 0o755)
+            with mock.patch.dict(os.environ, {"SSOO_US": "/otro/ssoo-us", "PATH": d}):
+                self.assertEqual(adm.programa(), "/otro/ssoo-us")
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                os.environ.pop("SSOO_US", None)
+                self.assertEqual(adm.programa(), ruta)
+            with mock.patch.dict(os.environ, {"PATH": "/no/existe"}):
+                os.environ.pop("SSOO_US", None)
+                self.assertEqual(adm.programa(), "/usr/local/bin/ssoo-us")
+
+    def test_sin_ssoo_us_instalado(self):
+        usuario = mock.Mock(pw_dir="/home/" + UVUS)
+        errores = io.StringIO()
+        with mock.patch.dict(os.environ, {"SSOO_US": "/no/existe/ssoo-us"}), \
+                mock.patch.object(adm.pwd, "getpwnam", return_value=usuario), \
+                mock.patch.object(adm.subprocess, "run") as run, \
+                mock.patch("sys.stderr", errores):
+            self.assertEqual(adm.main([UVUS]), 2)
+        run.assert_not_called()
+        self.assertIn("tools/instalar.sh", errores.getvalue())
 
     def test_usuario_inexistente(self):
         with mock.patch.object(adm.pwd, "getpwnam", side_effect=KeyError), \

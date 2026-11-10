@@ -473,7 +473,7 @@ def comprobar_meta_data(texto, uvus, maquina):
                         efecto="si es el de otra máquina suya, puede estar "
                                "diagnosticando los archivos de esa otra máquina.",
                         arreglo="instance-id: %s (si estos archivos son de otra máquina, "
-                                "indique esa: ./ssoo-us diagnosis serverX)." % esperado,
+                                "indique esa: ssoo-us diagnosis serverX)." % esperado,
                         seccion=sec))
     elif esperado:
         rs.append(ok("meta-data: instance-id %s" % iid))

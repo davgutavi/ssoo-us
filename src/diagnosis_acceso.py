@@ -162,7 +162,7 @@ def comprobar_conectividad(ip):
                                "(o la máquina se ha quedado en modo de emergencia).",
                         arreglo=["Si acaba de crearla o de arrancarla, espere un minuto y repita.",
                                  "Si sigue igual, apáguela y vuelva a ejecutar "
-                                 "./ssoo-us diagnosis: con la máquina apagada se revisa su "
+                                 "ssoo-us diagnosis: con la máquina apagada se revisa su "
                                  "disco, y se ve %s" % causa,
                                  "$ virsh shutdown %s" % nombre_de_maquina()],
                         seccion="acceso"))
@@ -174,7 +174,7 @@ def comprobar_conectividad(ip):
                                "network-config no le ha dado esa IP (B6).",
                         arreglo=["Si acaba de crearla o de arrancarla, espere un minuto y repita.",
                                  "Si sigue igual, apáguela y vuelva a ejecutar "
-                                 "./ssoo-us diagnosis: con la máquina apagada se revisa su "
+                                 "ssoo-us diagnosis: con la máquina apagada se revisa su "
                                  "disco, y se ve %s" % causa,
                                  "$ virsh shutdown %s" % nombre_de_maquina()],
                         seccion="acceso"))
@@ -187,7 +187,7 @@ def comprobar_conectividad(ip):
                                "network-config no le ha dado esa IP (B6).",
                         arreglo=["Si acaba de crearla o de arrancarla, espere un minuto y repita.",
                                  "Si sigue igual, apáguela y vuelva a ejecutar "
-                                 "./ssoo-us diagnosis: con la máquina apagada se revisa su "
+                                 "ssoo-us diagnosis: con la máquina apagada se revisa su "
                                  "disco, y se ve %s" % causa,
                                  "$ virsh shutdown %s" % nombre_de_maquina()],
                         seccion="acceso"))
@@ -290,7 +290,7 @@ def comprobar_ssh(ip, home, cifrada, en_agente, esperado=None):
                 efecto="lo que falla está en lo que cloud-init instaló en la máquina "
                        "(usuario o clave).",
                 arreglo=["Apague la máquina y, cuando esté apagada, vuelva a ejecutar "
-                         "./ssoo-us diagnosis: con la máquina apagada se revisa su disco y se ve "
+                         "ssoo-us diagnosis: con la máquina apagada se revisa su disco y se ve "
                          "qué usuario y qué clave le instaló cloud-init.",
                          "$ virsh shutdown %s" % nombre_de_maquina(),
                          "$ virsh domstate %s" % nombre_de_maquina(),
@@ -381,14 +381,14 @@ def _valor(palabras, opcion):
 ERRORES_VIRT_INSTALL = (
     ("is already in use", "C2", "la máquina (o el disco) ya existe. Si quiere volver a "
      "crearla, elimine antes la que hay; si lo que pasa es que no puede entrar, use "
-     "./ssoo-us diagnosis --acceso."),
+     "ssoo-us diagnosis --acceso."),
     ("Size must be specified for non existent volume", "B3",
      "no existe el disco de --disk path=: créelo antes con qemu-img create, desde "
-     "~/imagenesMV (./ssoo-us diagnosis --antes le da la orden)."),
-    ("Permission denied", "B8", "QEMU no puede llegar al disco: ./ssoo-us diagnosis --antes "
+     "~/imagenesMV (ssoo-us diagnosis --antes le da la orden)."),
+    ("Permission denied", "B8", "QEMU no puede llegar al disco: ssoo-us diagnosis --antes "
      "le dice qué directorio tiene que abrir (chmod o+x)."),
     ("codec can't decode", "A1", "un silo del servidor tiene un archivo con un nombre "
-     "que no es UTF-8: ./ssoo-us diagnosis --antes le dice cuál; si no es suyo, avise al "
+     "que no es UTF-8: ssoo-us diagnosis --antes le dice cuál; si no es suyo, avise al "
      "profesor."),
     ("Cannot access backing file", "B3", "la imagen base no está donde estaba al crear "
      "el disco: devuélvala a su sitio, con su nombre."),

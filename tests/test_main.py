@@ -1,10 +1,12 @@
 """El despachador de subcomandos: --version, -h y los subcomandos."""
 
 import os
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-from comun import entorno_sin_libvirt, lanzar, su
+from comun import SCRIPT, entorno_sin_libvirt, lanzar, su
 
 
 class TestDespachador(unittest.TestCase):
@@ -20,7 +22,7 @@ class TestDespachador(unittest.TestCase):
         for opcion in ("-h", "--help", "--ayuda"):
             codigo, salida, errores = lanzar(opcion)
             self.assertEqual(codigo, 0, opcion)
-            self.assertTrue(salida.startswith("Uso: ./ssoo-us SUBCOMANDO"), opcion)
+            self.assertTrue(salida.startswith("Uso: ssoo-us SUBCOMANDO"), opcion)
             for subcomando in su.SUBCOMANDOS:
                 self.assertIn("  %s " % subcomando, salida)
             self.assertEqual(errores, "")
@@ -51,13 +53,13 @@ class TestDespachador(unittest.TestCase):
         self.assertEqual(lanzar("diagnosis", "--version"), (0, "ssoo-us %s\n" % su.VERSION, ""))
         codigo, salida, _ = lanzar("diagnosis", "-h")
         self.assertEqual(codigo, 0)
-        self.assertTrue(salida.startswith("Uso: ./ssoo-us diagnosis "))
+        self.assertTrue(salida.startswith("Uso: ssoo-us diagnosis "))
 
     def test_diagnosis_opcion_desconocida(self):
         codigo, salida, errores = lanzar("diagnosis", "--listar")
         self.assertEqual((codigo, salida), (2, ""))
         self.assertIn("ssoo-us diagnosis: opción desconocida: --listar", errores)
-        self.assertIn("Consulte la ayuda con: ./ssoo-us diagnosis --ayuda", errores)
+        self.assertIn("Consulte la ayuda con: ssoo-us diagnosis --ayuda", errores)
 
     def test_diagnosis_sin_el_modulo_libvirt(self):
         # Un libvirt que no se puede importar, aquí y en un servidor que sí lo tiene
@@ -74,6 +76,71 @@ class TestDespachador(unittest.TestCase):
                                     entorno=entorno_sin_libvirt())
         self.assertEqual(codigo, 38)
         self.assertIn("ERROR [38] No se puede conectar con libvirt", errores)
+
+
+class TestNombreDelPrograma(unittest.TestCase):
+    """Cómo se nombra en los mensajes: como lo escribió el alumno, o «ssoo-us»
+    si lo encontró en el PATH (instalado en el servidor)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bin = os.path.join(self.tmp.name, "bin")
+        os.mkdir(self.bin)
+        self.silo = os.path.join(self.tmp.name, "imagenesMV")
+        os.mkdir(self.silo)
+        for d in (self.bin, self.silo):
+            with open(os.path.join(d, "ssoo-us"), "w") as f:
+                f.write("#!/usr/bin/python3\n")
+            os.chmod(os.path.join(d, "ssoo-us"), 0o755)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def nombre(self, argv0, path):
+        with mock.patch.object(su.sys, "argv", [argv0]), \
+                mock.patch.dict(os.environ, {"PATH": path}):
+            return su.nombre_programa()
+
+    def test_instalado(self):
+        # Desde el PATH, Python recibe la ruta completa
+        self.assertEqual(self.nombre(os.path.join(self.bin, "ssoo-us"), self.bin), "ssoo-us")
+
+    def test_instalado_con_un_enlace(self):
+        enlaces = os.path.join(self.tmp.name, "local")
+        os.mkdir(enlaces)
+        os.symlink(os.path.join(self.bin, "ssoo-us"), os.path.join(enlaces, "ssoo-us"))
+        self.assertEqual(self.nombre(os.path.join(enlaces, "ssoo-us"), enlaces), "ssoo-us")
+
+    def test_una_copia_en_el_silo(self):
+        anterior = os.getcwd()
+        os.chdir(self.silo)
+        try:
+            # Aunque haya otro ssoo-us instalado: se nombra el que se ha lanzado
+            self.assertEqual(self.nombre("./ssoo-us", self.bin), "./ssoo-us")
+            self.assertEqual(self.nombre("./ssoo-us", "/usr/bin:/bin"), "./ssoo-us")
+        finally:
+            os.chdir(anterior)
+
+    def test_por_la_entrada_estandar(self):
+        with mock.patch.object(su.sys, "argv", ["-"]):
+            self.assertEqual(su.ruta_del_programa(), "ssoo-us")
+        self.assertEqual(self.nombre("-", "/usr/bin:/bin"), "ssoo-us")
+
+    def test_de_verdad_desde_el_path(self):
+        # El programa de verdad, instalado en un directorio del PATH
+        with open(SCRIPT, "rb") as f:
+            datos = f.read()
+        with open(os.path.join(self.bin, "ssoo-us"), "wb") as f:
+            f.write(datos)
+        entorno = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get("PATH", ""))
+        for argumentos, flujo, esperado in (
+                (["provision", "-h"], "stdout", "  ssoo-us provision [opciones] MAQUINA [IP]"),
+                (["--nada"], "stderr", "Consulte la ayuda con: ssoo-us -h")):
+            p = subprocess.run(["ssoo-us"] + argumentos, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=entorno)
+            texto = getattr(p, flujo).decode("utf-8")
+            self.assertIn(esperado, texto)
+            self.assertNotIn(self.bin, texto)
 
 
 class TestEjecutar(unittest.TestCase):

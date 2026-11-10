@@ -140,7 +140,7 @@ class TestOpciones(unittest.TestCase):
                          (0, "ssoo-us %s\n" % cd.VERSION))
         codigo, salida, _ = self.ejecutar_main(["--ayuda"])
         self.assertEqual(codigo, 0)
-        self.assertIn("Uso: ./ssoo-us diagnosis", salida)
+        self.assertIn("Uso: ssoo-us diagnosis", salida)
         self.assertNotIn("prompt", salida.lower())
 
     def test_opcion_desconocida(self):

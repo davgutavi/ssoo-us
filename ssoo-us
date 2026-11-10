@@ -2834,7 +2834,7 @@ class Asistente:
         # ci-provision hasta la 3.0.2, con «trap '' INT»; la 3.0.3 usa «trap ':' INT»).
         anterior_int = signal.signal(signal.SIGINT, lambda *_: None)
         try:
-            codigo = subprocess.call([sys.executable, nombre_programa(), "provision"] + argumentos,
+            codigo = subprocess.call([sys.executable, ruta_del_programa(), "provision"] + argumentos,
                                      env=entorno)
         finally:
             signal.signal(signal.SIGINT, anterior_int)
@@ -4894,7 +4894,7 @@ def comprobar_meta_data(texto, uvus, maquina):
                         efecto="si es el de otra máquina suya, puede estar "
                                "diagnosticando los archivos de esa otra máquina.",
                         arreglo="instance-id: %s (si estos archivos son de otra máquina, "
-                                "indique esa: ./ssoo-us diagnosis serverX)." % esperado,
+                                "indique esa: ssoo-us diagnosis serverX)." % esperado,
                         seccion=sec))
     elif esperado:
         rs.append(ok("meta-data: instance-id %s" % iid))
@@ -5643,7 +5643,7 @@ def comprobar_nombres_libres(conn, uvus, home, directorio, maquina, ip=None, red
                             arreglo="si quiere volver a crearla, apáguela y elimínela "
                                     "con su disco (virsh destroy y virsh undefine "
                                     "--remove-all-storage). Si lo que pasa es que no puede "
-                                    "entrar en ella, use ./ssoo-us diagnosis --acceso.",
+                                    "entrar en ella, use ssoo-us diagnosis --acceso.",
                             seccion="acceso"))
         else:
             rs.append(ok("El nombre %s está libre" % nombre))
@@ -5928,7 +5928,7 @@ def comprobar_conectividad(ip):
                                "(o la máquina se ha quedado en modo de emergencia).",
                         arreglo=["Si acaba de crearla o de arrancarla, espere un minuto y repita.",
                                  "Si sigue igual, apáguela y vuelva a ejecutar "
-                                 "./ssoo-us diagnosis: con la máquina apagada se revisa su "
+                                 "ssoo-us diagnosis: con la máquina apagada se revisa su "
                                  "disco, y se ve %s" % causa,
                                  "$ virsh shutdown %s" % nombre_de_maquina()],
                         seccion="acceso"))
@@ -5940,7 +5940,7 @@ def comprobar_conectividad(ip):
                                "network-config no le ha dado esa IP (B6).",
                         arreglo=["Si acaba de crearla o de arrancarla, espere un minuto y repita.",
                                  "Si sigue igual, apáguela y vuelva a ejecutar "
-                                 "./ssoo-us diagnosis: con la máquina apagada se revisa su "
+                                 "ssoo-us diagnosis: con la máquina apagada se revisa su "
                                  "disco, y se ve %s" % causa,
                                  "$ virsh shutdown %s" % nombre_de_maquina()],
                         seccion="acceso"))
@@ -5953,7 +5953,7 @@ def comprobar_conectividad(ip):
                                "network-config no le ha dado esa IP (B6).",
                         arreglo=["Si acaba de crearla o de arrancarla, espere un minuto y repita.",
                                  "Si sigue igual, apáguela y vuelva a ejecutar "
-                                 "./ssoo-us diagnosis: con la máquina apagada se revisa su "
+                                 "ssoo-us diagnosis: con la máquina apagada se revisa su "
                                  "disco, y se ve %s" % causa,
                                  "$ virsh shutdown %s" % nombre_de_maquina()],
                         seccion="acceso"))
@@ -6056,7 +6056,7 @@ def comprobar_ssh(ip, home, cifrada, en_agente, esperado=None):
                 efecto="lo que falla está en lo que cloud-init instaló en la máquina "
                        "(usuario o clave).",
                 arreglo=["Apague la máquina y, cuando esté apagada, vuelva a ejecutar "
-                         "./ssoo-us diagnosis: con la máquina apagada se revisa su disco y se ve "
+                         "ssoo-us diagnosis: con la máquina apagada se revisa su disco y se ve "
                          "qué usuario y qué clave le instaló cloud-init.",
                          "$ virsh shutdown %s" % nombre_de_maquina(),
                          "$ virsh domstate %s" % nombre_de_maquina(),
@@ -6147,14 +6147,14 @@ def _valor(palabras, opcion):
 ERRORES_VIRT_INSTALL = (
     ("is already in use", "C2", "la máquina (o el disco) ya existe. Si quiere volver a "
      "crearla, elimine antes la que hay; si lo que pasa es que no puede entrar, use "
-     "./ssoo-us diagnosis --acceso."),
+     "ssoo-us diagnosis --acceso."),
     ("Size must be specified for non existent volume", "B3",
      "no existe el disco de --disk path=: créelo antes con qemu-img create, desde "
-     "~/imagenesMV (./ssoo-us diagnosis --antes le da la orden)."),
-    ("Permission denied", "B8", "QEMU no puede llegar al disco: ./ssoo-us diagnosis --antes "
+     "~/imagenesMV (ssoo-us diagnosis --antes le da la orden)."),
+    ("Permission denied", "B8", "QEMU no puede llegar al disco: ssoo-us diagnosis --antes "
      "le dice qué directorio tiene que abrir (chmod o+x)."),
     ("codec can't decode", "A1", "un silo del servidor tiene un archivo con un nombre "
-     "que no es UTF-8: ./ssoo-us diagnosis --antes le dice cuál; si no es suyo, avise al "
+     "que no es UTF-8: ssoo-us diagnosis --antes le dice cuál; si no es suyo, avise al "
      "profesor."),
     ("Cannot access backing file", "B3", "la imagen base no está donde estaba al crear "
      "el disco: devuélvala a su sitio, con su nombre."),
@@ -6626,7 +6626,7 @@ def comprobar_disco(archivos, instancias, clave, user_data_actual, iid_actual, r
 # --- diagnosis: opciones y flujo -----------------------------------------------
 
 USO_DIAGNOSIS = """\
-Uso: ./ssoo-us diagnosis [serverX] [--antes | --acceso] [--ip IP]
+Uso: ssoo-us diagnosis [serverX] [--antes | --acceso] [--ip IP]
 
 Revisa la construcción de una máquina virtual con cloud-init (manual,
 sección 5.4) y dice qué falla. Ejecútelo desde su silo (~/imagenesMV).
@@ -6752,7 +6752,7 @@ def diagnosticar_antes(uvus, home, directorio, maquina, conn=None):
                                                        maquina, ip, red)
         if not res_nombres and maquina is None:
             res_nombres = [omitida("Nombre de la máquina: no se sabe qué máquina es "
-                                   "(indíquela: ./ssoo-us diagnosis server1)")]
+                                   "(indíquela: ssoo-us diagnosis server1)")]
         informe.bloque("Nombres libres", res_nombres)
         if maquina and not existe:
             anterior = comprobar_intento_anterior(home, uvus, "%s-%s" % (uvus, maquina))
@@ -6811,7 +6811,7 @@ def diagnosticar_acceso(uvus, home, directorio, maquina, conn, ip_forzada=None):
         informe.bloque("Máquina", [error(
             "No existe la máquina %s" % nombre,
             arreglo="si todavía no la ha creado, revise antes su trabajo con "
-                    "./ssoo-us diagnosis --antes.", seccion="instanciar")])
+                    "ssoo-us diagnosis --antes.", seccion="instanciar")])
         return informe
     m = Maquina(dominio)
     res_claves, clave = comprobar_claves(home)
@@ -6888,7 +6888,7 @@ def revisar_disco(conn, maquina, clave, directorio, iid, red, entra=False):
         else:
             rs.append(omitida(
                 "Por dentro: para revisarlo, apáguela (virsh shutdown %s), espere a que "
-                "virsh domstate %s diga «shut off» y vuelva a ejecutar ./ssoo-us diagnosis"
+                "virsh domstate %s diga «shut off» y vuelva a ejecutar ssoo-us diagnosis"
                 % (maquina.nombre, maquina.nombre)))
         return rs
     if not maquina.apagada:
@@ -6919,14 +6919,14 @@ def revisar_disco(conn, maquina, clave, directorio, iid, red, entra=False):
 
 
 def diagnosis(argv=None):
-    """./ssoo-us diagnosis ARGUMENTOS. Devuelve el código de salida (la
+    """ssoo-us diagnosis ARGUMENTOS. Devuelve el código de salida (la
     codificación de la salida ya la ha preparado main())."""
     argv = sys.argv[2:] if argv is None else argv
     try:
         opciones = analizar_argumentos(argv)
     except ErrorDeUso as e:
         print("ssoo-us diagnosis: %s" % e, file=sys.stderr)
-        print("Consulte la ayuda con: ./ssoo-us diagnosis --ayuda", file=sys.stderr)
+        print("Consulte la ayuda con: ssoo-us diagnosis --ayuda", file=sys.stderr)
         return 2
     if opciones["ayuda"]:
         print(USO_DIAGNOSIS, end="")
@@ -6959,7 +6959,7 @@ def diagnosis(argv=None):
         if modo == "acceso":
             if maquina is None:
                 print("ssoo-us diagnosis: indique qué máquina quiere revisar "
-                      "(por ejemplo: ./ssoo-us diagnosis server1 --acceso).", file=sys.stderr)
+                      "(por ejemplo: ssoo-us diagnosis server1 --acceso).", file=sys.stderr)
                 return 2
             informe = diagnosticar_acceso(uvus, home, directorio, maquina, conn,
                                           opciones["ip"])
@@ -6991,16 +6991,16 @@ def diagnosis(argv=None):
 # --- Programa principal --------------------------------------------------------
 
 USO = """\
-Uso: ./ssoo-us SUBCOMANDO [opciones]
+Uso: ssoo-us SUBCOMANDO [opciones]
 
 Herramientas de la asignatura Sistemas Operativos (Universidad de Sevilla)
 para las máquinas virtuales de los servidores de la asignatura.
 
 Subcomandos:
   provision   crea máquinas virtuales con cloud-init (sustituye a
-              ci-provision.sh). Su ayuda: ./ssoo-us provision -h
+              ci-provision.sh). Su ayuda: ssoo-us provision -h
   diagnosis   revisa la construcción de una máquina y dice qué falla
-              (sustituye a ci-diagnosis). Su ayuda: ./ssoo-us diagnosis -h
+              (sustituye a ci-diagnosis). Su ayuda: ssoo-us diagnosis -h
 
 Opciones:
   --version   muestra la versión.
@@ -7012,9 +7012,22 @@ Código de salida: el del subcomando; 2 si la orden está mal escrita.
 SUBCOMANDOS = ("provision", "diagnosis")
 
 
+def ruta_del_programa():
+    """El archivo del programa, tal y como se lanzó (para volver a lanzarlo)."""
+    return sys.argv[0] if sys.argv and sys.argv[0] not in ("", "-") else PROGRAMA
+
+
 def nombre_programa():
-    """Cómo se ha llamado al programa, para los mensajes (./ssoo-us, ssoo-us...)."""
-    return sys.argv[0] if sys.argv and sys.argv[0] else PROGRAMA
+    """Cómo se ha llamado al programa, para los mensajes: como el alumno lo
+    escribió (./ssoo-us, ~/bin/ssoo-us...), salvo si lo encontró en el PATH
+    (instalado en /usr/local/bin): entonces, sin la ruta («ssoo-us»), aunque
+    Python reciba la ruta completa."""
+    ruta = ruta_del_programa()
+    nombre = os.path.basename(ruta)
+    en_el_path = shutil.which(nombre)
+    if en_el_path and os.path.realpath(en_el_path) == os.path.realpath(ruta):
+        return nombre
+    return ruta
 
 
 def main(argv=None):

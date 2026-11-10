@@ -404,7 +404,7 @@ class Asistente:
         # ci-provision hasta la 3.0.2, con «trap '' INT»; la 3.0.3 usa «trap ':' INT»).
         anterior_int = signal.signal(signal.SIGINT, lambda *_: None)
         try:
-            codigo = subprocess.call([sys.executable, nombre_programa(), "provision"] + argumentos,
+            codigo = subprocess.call([sys.executable, ruta_del_programa(), "provision"] + argumentos,
                                      env=entorno)
         finally:
             signal.signal(signal.SIGINT, anterior_int)

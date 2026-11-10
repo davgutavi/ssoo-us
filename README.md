@@ -4,10 +4,12 @@
 **Asignatura: Sistemas Operativos — Universidad de Sevilla**
 
 > **En desarrollo.** Este curso siga usando `ci-provision.sh` y `ci-diagnosis`.
-> `ssoo-us provision` y `ssoo-us diagnosis` ya hacen lo mismo que ellas, pero
-> aún no se han probado en los servidores.
+> `ssoo-us provision` y `ssoo-us diagnosis` ya hacen lo mismo que ellas y se han
+> probado en los servidores, pero todavía no están instalados en ellos.
 
-`ssoo-us` reunirá en un solo programa las dos herramientas de la asignatura:
+`ssoo-us` reúne en un solo programa las dos herramientas de la asignatura. Está
+instalado en los servidores de la asignatura para todos los usuarios: no hay que
+descargar nada.
 
 - `ssoo-us provision`: crea máquinas virtuales con cloud-init en su silo, como
   `ci-provision.sh`, con las mismas opciones.
@@ -15,8 +17,10 @@
   como `ci-diagnosis`, con las mismas opciones.
 
 ```
-./ssoo-us --version
-./ssoo-us -h
+ssoo-us --version
+ssoo-us -h
+ssoo-us provision -h
+ssoo-us diagnosis -h
 ```
 
 Si va a modificar la herramienta, lea [DESARROLLO.md](DESARROLLO.md).

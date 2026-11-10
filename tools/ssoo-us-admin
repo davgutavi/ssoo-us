@@ -3,7 +3,6 @@
 
 Uso:
   ssoo-us-admin UVUS [serverX] [--antes | --acceso] [--ip IP] [--dir DIRECTORIO]
-  ssoo-us-admin --actualizar
   ssoo-us-admin --ayuda
 
 Busca en libvirt los silos y las máquinas del alumno, elige el directorio en el
@@ -18,32 +17,26 @@ profesor.
                   se pasan tal cual a diagnosis.
   --dir DIRECTORIO
                   revisar desde ese directorio en lugar del que se elige solo.
-  --actualizar    descarga la última versión de ssoo-us y de este script
-                  (rama main de GitHub) en el directorio de este script.
 
-diagnosis solo lee: no cambia nada en la cuenta del alumno. El programa se le
-pasa por la entrada estándar, así que el alumno no necesita poder leer este
-directorio. Este script tampoco cambia nada: libvirt se abre en solo lectura.
+Usa el ssoo-us instalado en el servidor (el del PATH; SSOO_US=RUTA usa otro,
+que el alumno tiene que poder leer). diagnosis solo lee: no cambia nada en la
+cuenta del alumno. Este script tampoco cambia nada: libvirt se abre en solo
+lectura.
 """
 
 import os
 import pwd
 import re
+import shutil
 import subprocess
 import sys
-import tempfile
-import urllib.request
 import xml.etree.ElementTree as ET
 
 URI = "qemu:///system"
-AQUI = os.path.dirname(os.path.abspath(__file__))
-URL = "https://raw.githubusercontent.com/davgutavi/ssoo-us/main/"
-DESCARGAS = (("ssoo-us", "ssoo-us"),
-             ("tools/ssoo-us-admin", "ssoo-us-admin"))
-# Lo que hace el alumno, con sudo: entrar en el directorio y ejecutar el programa
-# que llega por la entrada estándar, con el subcomando diagnosis y el resto de
-# argumentos
-LANZADOR = 'cd -- "$1" || exit 2; shift; exec /usr/bin/python3 - diagnosis "$@"'
+INSTALADO = "/usr/local/bin/ssoo-us"
+# Lo que hace el alumno, con sudo: entrar en el directorio y ejecutar el
+# programa ($0) con el subcomando diagnosis y el resto de argumentos
+LANZADOR = 'cd -- "$1" || exit 2; shift; exec /usr/bin/python3 "$0" diagnosis "$@"'
 
 
 class ErrorDeUso(Exception):
@@ -51,14 +44,10 @@ class ErrorDeUso(Exception):
 
 
 def analizar_argumentos(argv):
-    """Devuelve (uvus, directorio o None, argumentos para diagnosis) o la
-    acción: ("ayuda",) o ("actualizar",)."""
+    """Devuelve (uvus, directorio o None, argumentos para diagnosis) o
+    ("ayuda",)."""
     if not argv or argv[0] in ("--ayuda", "-h", "--help"):
         return ("ayuda",)
-    if argv[0] == "--actualizar":
-        if len(argv) > 1:
-            raise ErrorDeUso("--actualizar no lleva más argumentos")
-        return ("actualizar",)
     uvus, resto = argv[0], argv[1:]
     if uvus.startswith("-"):
         raise ErrorDeUso("el primer argumento tiene que ser el UVUS del alumno")
@@ -139,13 +128,14 @@ def elegir_directorio(uvus, home, silos, existe=os.path.isdir):
     return home
 
 
-def orden_sudo(uvus, directorio, pasar):
+def orden_sudo(uvus, directorio, pasar, ssoo_us):
     return (["sudo", "-u", uvus, "-H", "--", "/bin/bash", "-c", LANZADOR,
-             "ssoo-us", directorio] + list(pasar))
+             ssoo_us, directorio] + list(pasar))
 
 
 def programa():
-    return os.environ.get("SSOO_US") or os.path.join(AQUI, "ssoo-us")
+    """El ssoo-us que se lanza: SSOO_US, el del PATH o el de /usr/local/bin."""
+    return os.environ.get("SSOO_US") or shutil.which("ssoo-us") or INSTALADO
 
 
 def abrir_libvirt():
@@ -160,29 +150,6 @@ def abrir_libvirt():
         return None
 
 
-def actualizar():
-    for origen, destino in DESCARGAS:
-        ruta = os.path.join(AQUI, destino)
-        try:
-            with urllib.request.urlopen(URL + origen, timeout=30) as r:
-                datos = r.read()
-        except Exception as e:
-            print("No se pudo descargar %s: %s" % (origen, e), file=sys.stderr)
-            return 1
-        if not datos.startswith(b"#!/usr/bin/python3"):
-            print("La descarga de %s no es lo esperado." % origen, file=sys.stderr)
-            return 1
-        fd, temporal = tempfile.mkstemp(dir=AQUI, prefix="." + destino + ".")
-        with os.fdopen(fd, "wb") as f:
-            f.write(datos)
-        os.chmod(temporal, 0o755)
-        os.replace(temporal, ruta)
-        version = re.search(rb'^VERSION = "([^"]+)"', datos, re.M)
-        print("%s actualizado%s." % (ruta, " (versión %s)" % version.group(1).decode()
-                                     if version else ""))
-    return 0
-
-
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     try:
@@ -194,9 +161,6 @@ def main(argv=None):
     if accion == ("ayuda",):
         print(__doc__.split("\n", 2)[2], end="")
         return 0
-    if accion == ("actualizar",):
-        return actualizar()
-
     uvus, directorio, pasar = accion
     try:
         home = pwd.getpwnam(uvus).pw_dir
@@ -204,9 +168,9 @@ def main(argv=None):
         print("ssoo-us-admin: no existe el usuario %s en este servidor." % uvus,
               file=sys.stderr)
         return 2
-    ci = programa()
-    if not os.path.isfile(ci):
-        print("ssoo-us-admin: no encuentro %s (descárguelo con --actualizar)." % ci,
+    ssoo_us = os.path.abspath(programa())
+    if not os.path.isfile(ssoo_us):
+        print("ssoo-us-admin: no encuentro %s (instálelo con tools/instalar.sh)." % ssoo_us,
               file=sys.stderr)
         return 2
 
@@ -231,12 +195,10 @@ def main(argv=None):
     print("Revisión desde %s, como %s (sudo puede pedir su contraseña)." % (directorio, uvus))
     print()
     sys.stdout.flush()
-    with open(ci, "rb") as entrada:
-        try:
-            return subprocess.run(orden_sudo(uvus, directorio, pasar),
-                                  stdin=entrada).returncode
-        except KeyboardInterrupt:
-            return 130
+    try:
+        return subprocess.run(orden_sudo(uvus, directorio, pasar, ssoo_us)).returncode
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

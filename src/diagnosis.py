@@ -1,7 +1,7 @@
 # --- diagnosis: opciones y flujo -----------------------------------------------
 
 USO_DIAGNOSIS = """\
-Uso: ./ssoo-us diagnosis [serverX] [--antes | --acceso] [--ip IP]
+Uso: ssoo-us diagnosis [serverX] [--antes | --acceso] [--ip IP]
 
 Revisa la construcción de una máquina virtual con cloud-init (manual,
 sección 5.4) y dice qué falla. Ejecútelo desde su silo (~/imagenesMV).
@@ -127,7 +127,7 @@ def diagnosticar_antes(uvus, home, directorio, maquina, conn=None):
                                                        maquina, ip, red)
         if not res_nombres and maquina is None:
             res_nombres = [omitida("Nombre de la máquina: no se sabe qué máquina es "
-                                   "(indíquela: ./ssoo-us diagnosis server1)")]
+                                   "(indíquela: ssoo-us diagnosis server1)")]
         informe.bloque("Nombres libres", res_nombres)
         if maquina and not existe:
             anterior = comprobar_intento_anterior(home, uvus, "%s-%s" % (uvus, maquina))
@@ -186,7 +186,7 @@ def diagnosticar_acceso(uvus, home, directorio, maquina, conn, ip_forzada=None):
         informe.bloque("Máquina", [error(
             "No existe la máquina %s" % nombre,
             arreglo="si todavía no la ha creado, revise antes su trabajo con "
-                    "./ssoo-us diagnosis --antes.", seccion="instanciar")])
+                    "ssoo-us diagnosis --antes.", seccion="instanciar")])
         return informe
     m = Maquina(dominio)
     res_claves, clave = comprobar_claves(home)
@@ -263,7 +263,7 @@ def revisar_disco(conn, maquina, clave, directorio, iid, red, entra=False):
         else:
             rs.append(omitida(
                 "Por dentro: para revisarlo, apáguela (virsh shutdown %s), espere a que "
-                "virsh domstate %s diga «shut off» y vuelva a ejecutar ./ssoo-us diagnosis"
+                "virsh domstate %s diga «shut off» y vuelva a ejecutar ssoo-us diagnosis"
                 % (maquina.nombre, maquina.nombre)))
         return rs
     if not maquina.apagada:
@@ -294,14 +294,14 @@ def revisar_disco(conn, maquina, clave, directorio, iid, red, entra=False):
 
 
 def diagnosis(argv=None):
-    """./ssoo-us diagnosis ARGUMENTOS. Devuelve el código de salida (la
+    """ssoo-us diagnosis ARGUMENTOS. Devuelve el código de salida (la
     codificación de la salida ya la ha preparado main())."""
     argv = sys.argv[2:] if argv is None else argv
     try:
         opciones = analizar_argumentos(argv)
     except ErrorDeUso as e:
         print("ssoo-us diagnosis: %s" % e, file=sys.stderr)
-        print("Consulte la ayuda con: ./ssoo-us diagnosis --ayuda", file=sys.stderr)
+        print("Consulte la ayuda con: ssoo-us diagnosis --ayuda", file=sys.stderr)
         return 2
     if opciones["ayuda"]:
         print(USO_DIAGNOSIS, end="")
@@ -334,7 +334,7 @@ def diagnosis(argv=None):
         if modo == "acceso":
             if maquina is None:
                 print("ssoo-us diagnosis: indique qué máquina quiere revisar "
-                      "(por ejemplo: ./ssoo-us diagnosis server1 --acceso).", file=sys.stderr)
+                      "(por ejemplo: ssoo-us diagnosis server1 --acceso).", file=sys.stderr)
                 return 2
             informe = diagnosticar_acceso(uvus, home, directorio, maquina, conn,
                                           opciones["ip"])

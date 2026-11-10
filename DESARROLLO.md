@@ -56,6 +56,7 @@ src/main.py       Despachador de subcomandos, --version y -h
 
 tools/ssoo-us-admin   Para el profesor: diagnosis sobre la cuenta de un alumno,
                       como él (con sudo)
+tools/instalar.sh     Instala ssoo-us y ssoo-us-admin en un servidor (con sudo)
 ```
 
 Tras modificar cualquiera de ellos, regenera el programa:
@@ -322,23 +323,45 @@ registro queda en `/tmp/pruebas-ssoo-us-diagnosis-CUENTA-FECHA.log`.
 `preparar-cuenta-prueba.sh --quitar` quita el silo y la red de la cuenta (sin
 borrar archivos).
 
-## Para el profesor: `tools/ssoo-us-admin`
+## Instalación en los servidores
+
+`ssoo-us` se instala en cada servidor como una orden para todos los usuarios:
+los alumnos escriben `ssoo-us provision …` o `ssoo-us diagnosis` desde su silo,
+y todos usan la misma versión. Se ejecuta con los permisos de quien la lanza,
+como antes `ci-provision.sh` y `ci-diagnosis`. Solo necesita lo que ya tienen
+los servidores: `/usr/bin/python3` (3.8 o posterior), PyYAML y `python3-libvirt`.
+
+Se copian `ssoo-us`, `tools/instalar.sh` y `tools/ssoo-us-admin` al servidor
+(en `DIR/` y `DIR/tools/`) y, con la cuenta de un profesor:
+
+```bash
+sudo bash DIR/tools/instalar.sh            # instala o actualiza
+sudo bash DIR/tools/instalar.sh --quitar   # lo quita
+```
+
+Instala `/usr/local/bin/ssoo-us` y `/usr/local/sbin/ssoo-us-admin`. Comprueba
+antes que el `python3` del sistema puede con él (y avisa si le falta PyYAML o
+`libvirt`, que necesita `diagnosis`), y dice qué versión había y cuál queda.
+Cada archivo se copia con otro nombre y luego se renombra: quien lo esté usando
+en ese momento sigue con la versión anterior y nadie ve un archivo a medias.
+Sus tests (`tests/test_instalar.py`) instalan en un directorio temporal
+(`DESTINO=RUTA`).
+
+## Para el profesor: `ssoo-us-admin`
 
 Lanza `ssoo-us diagnosis` sobre la cuenta de un alumno, como él (con `sudo`),
 desde el directorio en que trabaja (su silo `<uvus>-imagenesMV`, o
 `~/imagenesMV`): así revisa sus archivos, sus claves y su acceso por ssh tal y
-como los vería él. El programa le llega al alumno por la entrada estándar, así
-que no necesita poder leer el directorio del profesor. Es el
-`ci-diagnosis-admin` de `ci-diagnosis` 1.1.0:
+como los vería él. Usa el `ssoo-us` instalado (el del `PATH`, o
+`/usr/local/bin/ssoo-us`; `SSOO_US=RUTA` usa otro, que el alumno tiene que
+poder leer). Es el `ci-diagnosis-admin` de `ci-diagnosis` 1.1.0, sin
+`--actualizar` (ya no se descarga de GitHub):
 
 ```bash
-tools/ssoo-us-admin alu0000 server1 --acceso
-tools/ssoo-us-admin --actualizar     # baja ssoo-us y ssoo-us-admin de main
+ssoo-us-admin alu0000 server1 --acceso
 ```
 
-`--actualizar` descarga de `raw.githubusercontent.com`: solo funcionará cuando
-el repositorio sea público (o haya otra forma de distribuirlo). Sus tests son
-`tests/test_diagnosis_admin.py`.
+Sus tests son `tests/test_diagnosis_admin.py`.
 
 ## Lo que conviene saber antes de tocar el código
 
@@ -349,10 +372,12 @@ el repositorio sea público (o haya otra forma de distribuirlo). Sus tests son
   fuente de `diagnosis` no puede llamar a nada de `provision`; lo que tengan que
   compartir (como `IMAGEN_NOBLE`) va en `base.py`.
 - **Cómo se nombra a sí mismo.** `provision` escribe la orden como la llamaron
-  (`orden_provision()`, el `$0` de `ci-provision.sh`); `diagnosis` escribe
-  siempre `./ssoo-us diagnosis`, como `ci-diagnosis` escribía siempre
-  `./ci-diagnosis`: así sus mensajes valen también cuando lo lanza
-  `ssoo-us-admin`, que le pasa el programa por la entrada estándar.
+  (`orden_provision()`, el `$0` de `ci-provision.sh`), salvo si se encontró en
+  el `PATH`: entonces sin la ruta, `ssoo-us provision`, aunque Python reciba
+  `/usr/local/bin/ssoo-us` (`nombre_programa()`). `diagnosis` escribe siempre
+  `ssoo-us diagnosis`, que es como se usa instalado (como `ci-diagnosis`
+  escribía siempre `./ci-diagnosis`, que se descargaba en el silo). Para volver
+  a lanzarse (el asistente), `ruta_del_programa()`.
 - **Órdenes externas de `provision`, solo con `ejecutar()`** (`base.py`): sin teclado (la
   entrada es `/dev/null` salvo que se le pase texto), con `LC_ALL=C` (warcry y
   megadeth responden en español) y con `LIBVIRT_DEFAULT_URI=qemu:///system`

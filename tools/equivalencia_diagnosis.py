@@ -13,7 +13,7 @@ Las dos se cargan en este proceso y se ejecutan con libvirt, ping, el puerto
 22, ssh y guestfish simulados (falso_libvirt.py y los mismos parches que
 tests/test_diagnosis_salida.py), sobre la cuenta de un alumno de prueba en un
 directorio temporal. Antes de comparar se normaliza lo que cambia a propósito:
-el nombre («./ci-diagnosis» es «./ssoo-us diagnosis»), la versión, la línea
+el nombre («./ci-diagnosis» es «ssoo-us diagnosis»), la versión, la línea
 «(Versión en desarrollo.)» y los saltos de línea (el nombre nuevo es más largo
 y los párrafos se parten en otro sitio). Con -v se muestra cada caso.
 
@@ -273,10 +273,10 @@ def normalizar(texto, home):
     texto = re.sub(r"^ci-diagnosis \S+ · ", "CABECERA · ", texto, flags=re.M)
     texto = re.sub(r"^ssoo-us diagnosis \S+ · ", "CABECERA · ", texto, flags=re.M)
     texto = texto.replace("(Versión en desarrollo.)\n", "")
-    texto = texto.replace("./ci-diagnosis", "./ssoo-us diagnosis")
+    # ci-diagnosis se nombra «./ci-diagnosis» (se descarga en el silo); ssoo-us,
+    # «ssoo-us diagnosis» (se instala en el servidor)
+    texto = texto.replace("./ci-diagnosis", "ssoo-us diagnosis")
     texto = re.sub(r"^ci-diagnosis: ", "ssoo-us diagnosis: ", texto, flags=re.M)
-    # El único sitio en que ci-diagnosis se nombra sin «./» (B5, en --acceso)
-    texto = re.sub(r"ejecutar(\s+)ci-diagnosis:", r"ejecutar\1./ssoo-us diagnosis:", texto)
     return texto
 
 
