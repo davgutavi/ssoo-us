@@ -4,8 +4,8 @@
 **Asignatura: Sistemas Operativos — Universidad de Sevilla**
 
 > **En desarrollo.** Este curso siga usando `ci-provision.sh` y `ci-diagnosis`.
-> `ssoo-us provision` y `ssoo-us diagnosis` ya hacen lo mismo que ellas y se han
-> probado en los servidores, pero todavía no están instalados en ellos.
+> `ssoo-us provision` y `ssoo-us diagnosis` ya hacen lo mismo que ellas y están
+> instalados en los servidores, pero se estrenan el curso que viene.
 
 `ssoo-us` reúne en un solo programa las dos herramientas de la asignatura. Está
 instalado en los servidores de la asignatura para todos los usuarios: no hay que
