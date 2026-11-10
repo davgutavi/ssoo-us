@@ -9,8 +9,8 @@ mensajes y los mismos códigos de salida que cada uno. Están los dos
 subcomandos: `provision` (fases 1 a 6 del port: validaciones, `--dry-run`,
 máquina suelta, GlusterFS, `--listar`, `--eliminar`, `--eliminar-todo` y el
 asistente `--menu`) y `diagnosis` (fase 8: `--antes` y `--acceso`, como
-`ci-diagnosis` 1.0.2). Falta probarlos en los servidores (fase 7, y la batería
-de `ci-diagnosis` para `diagnosis`).
+`ci-diagnosis` 1.1.0). `provision` ha pasado su batería en avantasia; falta la
+de `diagnosis` (fase 7).
 
 ## Estructura
 
@@ -99,7 +99,7 @@ python3.11 -m venv .venv && .venv/bin/pip install pyyaml==6.0.2
 
 Los de `diagnosis` son `tests/test_diagnosis_*.py`, con `comun_diagnosis.py` y
 `falso_libvirt.py` (una conexión de libvirt simulada que falla si se le pide
-algo que no sea de lectura). Vienen de los de `ci-diagnosis` 1.0.2; además:
+algo que no sea de lectura). Vienen de los de `ci-diagnosis` 1.1.0; además:
 
 - `test_diagnosis_solo_lee.py`: `diagnosis` solo lee, aunque viva en un
   programa que escribe. Revisa los fuentes `src/diagnosis*.py` (no el programa
@@ -242,9 +242,10 @@ ignora, porque el hijo heredaría la señal ignorada y ya no podría atraparla.
 ### Pruebas de equivalencia con `ci-diagnosis`
 
 `tools/equivalencia_diagnosis.py` carga `ci-diagnosis` (el archivo generado de
-`../ci-diagnosis`) y `ssoo-us` en el mismo proceso y ejecuta las dos en 45
+`../ci-diagnosis`) y `ssoo-us` en el mismo proceso y ejecuta las dos en 52
 situaciones (opciones, `--antes` con todo bien y con distintos fallos,
-`--acceso` encendida y apagada...), con libvirt, ping, el puerto 22, ssh y
+`--acceso` encendida y apagada, la orden de `virt-install` de su registro...),
+con libvirt, ping, el puerto 22, ssh y
 guestfish simulados como en `test_diagnosis_salida.py`, y compara la salida,
 los errores y el código. Se normalizan el nombre (`./ci-diagnosis` es
 `./ssoo-us diagnosis`), la versión, la línea «(Versión en desarrollo.)» y los
@@ -255,14 +256,15 @@ sitio). Tarda unos segundos; con PyYAML:
 .venv/bin/python tools/equivalencia_diagnosis.py
 ```
 
-Hoy son iguales las 45. Los fuentes de `diagnosis` son de `ssoo-us`: se editan
-a mano. Si se corrige algo en `ci-diagnosis` mientras los alumnos lo usan, se
-trae a mano y esta herramienta dice si las dos siguen diciendo lo mismo.
+Hoy son iguales las 52, frente a `ci-diagnosis` 1.1.0. Los fuentes de
+`diagnosis` son de `ssoo-us`. Si cambia algo en `ci-diagnosis` mientras los
+alumnos lo usan, se trae aquí, y esta herramienta dice si las dos siguen
+diciendo lo mismo.
 
 ## Pruebas en un servidor de la asignatura
 
 Dos baterías, que ejecutan `ssoo-us` de verdad contra libvirt. Son las de
-`ci-provision` 3.0.3 y `ci-diagnosis` 1.0.2, con `ssoo-us`. Esperan el programa
+`ci-provision` 3.0.3 y `ci-diagnosis` 1.1.0, con `ssoo-us`. Esperan el programa
 en el directorio de arriba (`../ssoo-us`; `SSOO_US=RUTA` lo cambia), así que en
 el servidor se copian juntos, en un directorio que pueda leer la cuenta de
 prueba:
@@ -326,7 +328,7 @@ desde el directorio en que trabaja (su silo `<uvus>-imagenesMV`, o
 `~/imagenesMV`): así revisa sus archivos, sus claves y su acceso por ssh tal y
 como los vería él. El programa le llega al alumno por la entrada estándar, así
 que no necesita poder leer el directorio del profesor. Es el
-`ci-diagnosis-admin` de `ci-diagnosis` 1.0.2:
+`ci-diagnosis-admin` de `ci-diagnosis` 1.1.0:
 
 ```bash
 tools/ssoo-us-admin alu0000 server1 --acceso

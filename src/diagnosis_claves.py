@@ -1,8 +1,8 @@
 # --- Claves SSH (B5, B7, B10, D6) -------------------------------------------
 #
 # Nunca se muestra ni se guarda nada de la clave privada: de ella solo se lee la
-# cabecera, que en el formato openssh-key-v1 dice, sin cifrar, si tiene frase
-# de paso y cuál es su clave pública.
+# cabecera, que en el formato openssh-key-v1 dice, sin cifrar, si tiene
+# contraseña y cuál es su clave pública.
 
 class ClavePublica:
     def __init__(self, tipo, blob, comentario=""):
@@ -161,8 +161,13 @@ def comprobar_claves(home):
             "No existe ~/.ssh/id_rsa", fallo="B7",
             efecto="ssh no tiene con qué entrar en las máquinas: "
                    "«Permission denied (publickey)».",
-            arreglo="si la borró, genere una pareja nueva («ssh-keygen -t rsa») y "
-                    "rehaga user-data y las máquinas creadas con la anterior.",
+            arreglo=["Si la borró, aparte la pública que queda y genere una pareja "
+                     "nueva (acepte el nombre que propone):",
+                     "$ mv ~/.ssh/id_rsa.pub ~/.ssh/id_rsa.pub.vieja",
+                     "$ ssh-keygen -t rsa",
+                     "Después ponga la nueva ~/.ssh/id_rsa.pub en user-data y vuelva a "
+                     "crear las máquinas que ya tenga: las anteriores solo aceptan la "
+                     "clave que se perdió."],
             seccion="faq-publickey"))
         return rs, publica
 
@@ -187,10 +192,19 @@ def comprobar_claves(home):
 
     if formato is None:
         rs.append(error("~/.ssh/id_rsa no parece una clave privada", fallo="B7",
+                        efecto="ssh no tiene con qué entrar en las máquinas: "
+                               "«Permission denied (publickey)».",
+                        arreglo=["Apártela y genere una pareja nueva (acepte el nombre "
+                                 "que propone):",
+                                 "$ mv ~/.ssh/id_rsa ~/.ssh/id_rsa.mala",
+                                 "$ mv ~/.ssh/id_rsa.pub ~/.ssh/id_rsa.pub.mala",
+                                 "$ ssh-keygen -t rsa",
+                                 "Después ponga la nueva ~/.ssh/id_rsa.pub en user-data y "
+                                 "vuelva a crear las máquinas que ya tenga."],
                         seccion="preliminar"))
         return rs, publica
     if formato == "pem" and cifrada is False:
-        # Formato antiguo sin frase de paso: ssh-keygen calcula la pública
+        # Formato antiguo sin contraseña: ssh-keygen calcula la pública
         codigo, salida, _ = ejecutar_lectura(["ssh-keygen", "-y", "-P", "", "-f", ruta_priv])
         if codigo == 0:
             pub_de_priv = analizar_clave_publica(salida)
@@ -198,7 +212,7 @@ def comprobar_claves(home):
     if publica is not None:
         if pub_de_priv is None:
             rs.append(omitida("Correspondencia entre id_rsa e id_rsa.pub: no se "
-                              "puede comprobar sin la frase de paso"))
+                              "puede comprobar sin la contraseña de la clave"))
         elif pub_de_priv.blob == publica.blob:
             rs.append(ok("~/.ssh/id_rsa e id_rsa.pub son pareja"))
         else:
@@ -214,7 +228,7 @@ def comprobar_claves(home):
                 seccion="faq-publickey"))
 
     if cifrada is False:
-        rs.append(ok("La clave privada no tiene frase de paso: no necesita el agente"))
+        rs.append(ok("La clave privada no tiene contraseña: no necesita el agente"))
     elif cifrada:
         rs.append(comprobar_agente(pub_de_priv or publica))
     # Sin id_rsa.pub, la clave con la que entra ssh es la de id_rsa
@@ -248,13 +262,13 @@ def estado_de_la_clave(home):
 
 
 def comprobar_agente(clave):
-    """D6: con frase de paso, la clave debería estar cargada en el agente."""
+    """D6: con contraseña, la clave debería estar cargada en el agente."""
     arreglo_agente = ("cárguela con «ssh-add» (si no funciona, antes "
                       "«eval \"$(ssh-agent -s)\"»). Hay que hacerlo en cada sesión.")
-    efecto = ("ssh le pedirá la frase de paso cada vez. Si la teclea mal, "
+    efecto = ("ssh le pedirá la contraseña de la clave cada vez. Si la teclea mal, "
               "acabará en «Permission denied (publickey)» aunque todo esté bien.")
     if not os.environ.get("SSH_AUTH_SOCK"):
-        return aviso("Su clave tiene frase de paso y no hay agente en esta sesión",
+        return aviso("Su clave tiene contraseña y no hay agente en esta sesión",
                      fallo="D6", efecto=efecto, arreglo=arreglo_agente,
                      seccion="preliminar")
     codigo, salida, _ = ejecutar_lectura(["ssh-add", "-L"], timeout=10)

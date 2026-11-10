@@ -118,6 +118,28 @@ def permisos_abiertos(home, silo):
     os.chmod(os.path.join(silo, "server1.qcow2"), 0o666)
 
 
+# El registro de virt-install (~/.cache/virt-manager/virt-install.log)
+LINEA = ("[Thu, 05 Nov 2026 10:00:00 virt-install 1234] DEBUG (cli:204) Launched with "
+         "command line: /usr/bin/virt-install %s\n")
+MANUAL = ("--name=alu0000-server1 --cloud-init user-data=user-data,meta-data=meta-data,"
+          "network-config=network-config --ram=2048 --vcpus=2 --import --disk "
+          "path=server1.qcow2 --os-variant=ubuntu24.04 --network network=alu0000-red "
+          "--noautoconsole")
+FIN_BIEN = "[Thu, 05 Nov 2026 10:00:09 virt-install 1234] DEBUG (x:1) Domain creation completed.\n"
+
+
+def registro(orden, despues="", tambien=None):
+    """La orden en el registro de virt-install (y, si se da, otra preparación)."""
+    def preparar(home, silo):
+        directorio = os.path.join(home, ".cache", "virt-manager")
+        os.makedirs(directorio, exist_ok=True)
+        escribir(os.path.join(directorio, "virt-install.log"),
+                 LINEA % orden.replace("SILO", silo) + despues)
+        if tambien:
+            tambien(home, silo)
+    return preparar
+
+
 ENCENDIDA = {"activo": True}
 RECHAZA = (255, "", "Permission denied (publickey).\n")
 DISCO_MALO = ({}, None, None)
@@ -185,6 +207,26 @@ CASOS = [
     ("acceso: apagada, disco bueno", nada, {"maquina": {}, "disco": "bueno"}),
     ("acceso: apagada, guestfish falla", nada, {"maquina": {}}),
     ("acceso: apagada, imagen base movida", mover_imagen, {"maquina": {}}),
+    # La orden de virt-install, en su registro
+    ("antes: intento anterior con espacio tras la coma",
+     registro(MANUAL.replace("user-data,meta-data", "user-data, meta-data")), {}),
+    ("antes: intento anterior sin --cloud-init",
+     registro(MANUAL.replace("--cloud-init user-data=user-data,meta-data=meta-data,"
+                             "network-config=network-config ", "")), {}),
+    ("antes: intento anterior completado", registro(MANUAL, FIN_BIEN), {}),
+    ("acceso: entra, orden del manual", registro(MANUAL, FIN_BIEN),
+     {"maquina": ENCENDIDA, "puerto": "abierto", "ping": True, "ssh": (0, "", "")}),
+    ("acceso: orden mala (sin network-config, red default), pasos para rehacerla",
+     registro(MANUAL.replace(",network-config=network-config", "")
+              .replace("network=alu0000-red", "network=default"), FIN_BIEN),
+     {"maquina": ENCENDIDA, "puerto": "abierto", "ping": True, "ssh": RECHAZA}),
+    ("acceso: --cloud-init con archivos de otro directorio (E.4)",
+     registro(MANUAL.replace("user-data=user-data", "user-data=/tmp/x/user-data"), FIN_BIEN),
+     {"maquina": {}, "disco": "bueno"}),
+    ("acceso: apagada, error conocido en el registro",
+     registro(MANUAL, "[Thu, 05 Nov 2026 10:00:02 virt-install 1234] ERROR (cli:255) "
+                      "Size must be specified for non existent volume 'server1.qcow2'\n"),
+     {"maquina": {}}),
 ]
 
 

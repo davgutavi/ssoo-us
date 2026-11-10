@@ -1,6 +1,6 @@
 #!/bin/bash
 # Batería de pruebas de «ssoo-us diagnosis» en un servidor de la asignatura.
-# Es la de ci-diagnosis 1.0.2 (tools/pruebas-servidor.sh), con ssoo-us.
+# Es la de ci-diagnosis 1.1.0 (tools/pruebas-servidor.sh), con ssoo-us.
 #
 # Se ejecuta CON UNA CUENTA DE ALUMNO DE PRUEBA (sin sudo), preparada antes con
 # tools/preparar-cuenta-prueba.sh: silo <usuario>-imagenesMV, red <usuario>-red
@@ -27,7 +27,7 @@
 #       primera vez (unos 650 MB, se conserva en el silo). De 5 a 10 minutos.
 #   e   Los que faltaban: B9 (silo sobre un directorio que no existía), B3 con
 #       máquina (disco menor que la base, base movida), D5 (dos máquinas
-#       encendidas con la misma IP) y D6 (frase de paso tecleada mal). Unos 10
+#       encendidas con la misma IP) y D6 (contraseña de la clave tecleada mal). Unos 10
 #       minutos. Usa <usuario>-server1 y <usuario>-server2.
 #
 # Variables:
@@ -115,10 +115,10 @@ chmod 644 "$LOG"
 # ---------------------------------------------------------------------------
 # Utilidades
 # ---------------------------------------------------------------------------
-# Claves de usar y tirar, sin frase de paso salvo que se indique. Se borra
+# Claves de usar y tirar, sin contraseña salvo que se indique. Se borra
 # antes la anterior: al sobrescribir, ssh-keygen conserva los permisos que
 # tuviera el archivo (visto el 6-nov: una id_rsa en 644 seguía en 644)
-clave() {   # RUTA COMENTARIO [FRASE]
+clave() {   # RUTA COMENTARIO [CONTRASEÑA]
     rm -f "$1" "$1.pub"
     ssh-keygen -q -t rsa -b 2048 -N "${3:-}" -C "$2" -f "$1" </dev/null >/dev/null 2>&1
 }
@@ -335,7 +335,7 @@ FIN
     preparar_bien
     mv "$SILO/$BASE" "$T/$BASE"
     ejecuta "$SILO" server1
-    espera "imagen base movida" 'No está la imagen de la que depende server1\.qcow2'
+    espera "imagen base movida" 'No está la imagen de la que depende el disco server1\.qcow2'
     mv "$T/$BASE" "$SILO/$BASE"
 
     titulo "A.5 Directorio y permisos (B2, B8)"
@@ -366,8 +366,8 @@ FIN
     espera "id_rsa con permisos 644" 'permisos 0644.*\[B10\]'
     clave "$h/.ssh/id_rsa" "$USUARIO@servidor" "frase de prueba"
     SALIDA="$(cd "$SILO" && HOME="$h" SSH_AUTH_SOCK= "$PY" "$CI" diagnosis server1 2>&1)"
-    printf '\n$ HOME=%s diagnosis (con frase, sin agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
-    espera "frase de paso sin agente" 'no hay agente en esta sesión \[D6\]'
+    printf '\n$ HOME=%s diagnosis (con contraseña, sin agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
+    espera "contraseña sin agente" 'no hay agente en esta sesión \[D6\]'
     # Un agente propio, con la clave cargada sin teclado (SSH_ASKPASS)
     printf '#!/bin/sh\necho "frase de prueba"\n' > "$T/askpass"
     chmod 700 "$T/askpass"
@@ -376,8 +376,8 @@ FIN
     SSH_ASKPASS="$T/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=x \
         ssh-add "$h/.ssh/id_rsa" </dev/null >>"$LOG" 2>&1
     SALIDA="$(cd "$SILO" && HOME="$h" "$PY" "$CI" diagnosis server1 2>&1)"
-    printf '\n$ HOME=%s diagnosis (con frase, en el agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
-    espera "frase de paso con la clave en el agente" 'Su clave está cargada en el agente'
+    printf '\n$ HOME=%s diagnosis (con contraseña, en el agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
+    espera "contraseña con la clave en el agente" 'Su clave está cargada en el agente'
     kill "$AGENTE_PID" 2>/dev/null; AGENTE_PID=""
 
     titulo "A.7 cloud-init schema en el servidor (información para B4)"
@@ -512,7 +512,7 @@ fase_b() {
     ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new "administrador@$IP_VM" true \
         >>"$LOG" 2>&1
     apagar_vm
-    diag_disco "apagada: lee el disco con libguestfs" 'Disco leído'
+    diag_disco "apagada: lee el disco con libguestfs" 'disco leído'
     espera "...y la clave de la máquina es la suya" 'La máquina tiene su clave'
     espera "...y cloud-init no dejó errores" 'cloud-init terminó sin errores'
 
@@ -606,7 +606,7 @@ fase_b() {
         'no ha vuelto a aplicar user-data a este disco \[D2\]'
     eliminar_vm
 
-    titulo "B.8 Frase de paso, sin y con agente (D6), con un HOME aparte"
+    titulo "B.8 Contraseña de la clave, sin y con agente (D6), con un HOME aparte"
     local h="$T/home"
     mkdir -p -m 700 "$h/.ssh"
     clave "$h/.ssh/id_rsa" "$USUARIO@servidor" "frase de prueba"
@@ -622,11 +622,11 @@ fase_b() {
     esperar_puerto 180 || ko "el puerto 22 no se abre"
     esperar_cloud_init
     SALIDA="$(cd "$SILO" && HOME="$h" SSH_AUTH_SOCK= "$PY" "$CI" diagnosis server1 2>&1)"
-    printf '\n$ HOME=%s diagnosis (con frase, sin agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
+    printf '\n$ HOME=%s diagnosis (con contraseña, sin agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
     espera "sin agente: no concluyente, sin dar error de clave" 'no concluyente'
     no_aparece "...y no dice que la máquina rechace la clave" 'rechaza su clave'
     SALIDA="$(cd "$SILO" && HOME="$h" "$PY" "$CI" diagnosis server1 2>&1)"
-    printf '\n$ HOME=%s diagnosis (con frase, en el agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
+    printf '\n$ HOME=%s diagnosis (con contraseña, en el agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
     espera "con la clave en el agente: «Puede entrar»" 'Puede entrar'
     kill "$AGENTE_PID" 2>/dev/null; AGENTE_PID=""
     eliminar_vm
@@ -963,7 +963,7 @@ fase_e() {
     { virsh -q start "$VM" 2>&1; echo "[código $?]"; } | tee -a "$LOG" | sed 's/^/       | /'
     ejecuta "$SILO" server1
     espera "diagnosis --acceso: falta la imagen base del disco (B3)" \
-        'No está la imagen de la que depende el disco de la máquina \[B3\]'
+        'No está la imagen de la que depende el disco server1\.qcow2 \[B3\]'
     no_aparece "...y no culpa a libguestfs" 'libguestfs'
     mv "$T/$BASE" "$SILO/$BASE"
     eliminar_vm
@@ -1003,7 +1003,7 @@ fase_e() {
     VM="$USUARIO-server2" eliminar_vm
     eliminar_vm
 
-    titulo "E.5 Frase de paso tecleada mal (D6), con un HOME aparte"
+    titulo "E.5 Contraseña de la clave tecleada mal (D6), con un HOME aparte"
     local h="$T/home"
     mkdir -p -m 700 "$h/.ssh"
     clave "$h/.ssh/id_rsa" "$USUARIO@servidor" "frase de prueba"
@@ -1014,13 +1014,13 @@ fase_e() {
     esperar_cloud_init
     printf '#!/bin/sh\necho "frase equivocada"\n' > "$T/mal"
     chmod 700 "$T/mal"
-    info "ssh con la frase de paso equivocada (mensaje real):"
+    info "ssh con la contraseña de la clave equivocada (mensaje real):"
     SSH_ASKPASS="$T/mal" SSH_ASKPASS_REQUIRE=force DISPLAY=x \
         ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i "$h/.ssh/id_rsa" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "administrador@$IP_VM" true \
         </dev/null 2>&1 | tee -a "$LOG" | sed 's/^/       | /'
     SALIDA="$(cd "$SILO" && HOME="$h" SSH_AUTH_SOCK= "$PY" "$CI" diagnosis server1 2>&1)"
-    printf '\n$ HOME=%s diagnosis (con frase, sin agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
+    printf '\n$ HOME=%s diagnosis (con contraseña, sin agente)\n%s\n' "$h" "$SALIDA" >> "$LOG"
     espera "diagnosis: no concluyente, sin dar error de clave" 'no concluyente'
     eliminar_vm
 }
