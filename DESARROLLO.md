@@ -9,8 +9,8 @@ mensajes y los mismos códigos de salida que cada uno. Están los dos
 subcomandos: `provision` (fases 1 a 6 del port: validaciones, `--dry-run`,
 máquina suelta, GlusterFS, `--listar`, `--eliminar`, `--eliminar-todo` y el
 asistente `--menu`) y `diagnosis` (fase 8: `--antes` y `--acceso`, como
-`ci-diagnosis` 1.1.0). `provision` ha pasado su batería en avantasia; falta la
-de `diagnosis` (fase 7).
+`ci-diagnosis` 1.1.0). Los dos han pasado sus baterías de pruebas en avantasia
+(fase 7); falta repetirlas en warcry y megadeth.
 
 ## Estructura
 
