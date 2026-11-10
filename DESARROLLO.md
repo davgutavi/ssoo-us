@@ -9,8 +9,8 @@ mensajes y los mismos códigos de salida que cada uno. Están los dos
 subcomandos: `provision` (fases 1 a 6 del port: validaciones, `--dry-run`,
 máquina suelta, GlusterFS, `--listar`, `--eliminar`, `--eliminar-todo` y el
 asistente `--menu`) y `diagnosis` (fase 8: `--antes` y `--acceso`, como
-`ci-diagnosis` 1.1.0). Los dos han pasado sus baterías de pruebas en avantasia
-(fase 7); falta repetirlas en warcry y megadeth.
+`ci-diagnosis` 1.1.0). Los dos han pasado sus baterías de pruebas en avantasia,
+warcry y megadeth (fase 7).
 
 ## Estructura
 
@@ -290,7 +290,8 @@ PREFIJO=pruebas bash DIR/tools/pruebas-servidor-provision.sh c   # el clúster G
   `--glusterfs` desde Noble y desde ubuntu-base; `--listar` y `--eliminar`.
   Crea `pruebas1`, `pruebasgluster` y `pruebasnoble`.
 - **C**: el clúster, comprobado nodo a nodo, con MySQL en Podman sobre el
-  volumen disperso (`SIN_MYSQL=1` lo omite), y los nodos rehechos con
+  volumen disperso (`SIN_MYSQL=1` lo omite; se le dan hasta 5 minutos para
+  aceptar conexiones: en megadeth tardó unos 130 s), y los nodos rehechos con
   `--base`. Con `PREFIJO=xxx` el clúster es `xxx-server1`..`4`, para no tocar
   los `server1`..`4` de la cuenta.
 

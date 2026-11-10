@@ -553,8 +553,17 @@ fase_c() {
             "sudo podman run -d --name glusterSQL -e MYSQL_ROOT_PASSWORD=pruebas -v /disperso:/var/lib/mysql docker.io/library/mysql:latest >/dev/null 2>&1; echo \$?"
         sleep 90
         en_vm_es "$ip4" "MySQL sigue en marcha a los 90 s" "running" "sudo podman inspect -f '{{.State.Status}}' glusterSQL"
-        # La línea del servidor ('port: 3306  MySQL Community Server'), no la del X Plugin (33060)
-        en_vm_es "$ip4" "MySQL acepta conexiones"        "1" "sudo podman logs glusterSQL 2>&1 | grep -c 'ready for connections.* port: 3306 '"
+        # La línea del servidor ('port: 3306  MySQL Community Server'), no la del X Plugin (33060).
+        # La primera vez MySQL prepara su directorio, y sobre el volumen disperso puede
+        # tardar más de 90 s (megadeth, 10-nov): se le dan hasta 5 minutos
+        LISTO_MYSQL="sudo podman logs glusterSQL 2>&1 | grep -c 'ready for connections.* port: 3306 '"
+        espera_mysql=90
+        while (( espera_mysql < 300 )) \
+                && [[ "$(en_vm "$ip4" "$LISTO_MYSQL" 2>>"$LOG" | tr -d '\r' | head -1)" != "1" ]]; do
+            sleep 10
+            espera_mysql=$(( espera_mysql + 10 ))
+        done
+        en_vm_es "$ip4" "MySQL acepta conexiones (a los ${espera_mysql} s o antes)" "1" "$LISTO_MYSQL"
         en_vm_es "$ip4" "sin OOM killer"                 "0" "sudo dmesg | grep -ci 'out of memory'"
         info "memoria de server4 con MySQL: $(en_vm "$ip4" "free -m | awk '/^Mem:/ {print \$2\" MB en total, \"\$7\" MB disponibles\"}'" 2>/dev/null); contenedor: $(en_vm "$ip4" "sudo podman stats --no-stream --format '{{.MemUsage}}' glusterSQL" 2>/dev/null)"
         info "tiempo de C1b: $(( SECONDS - inicio ))s"
