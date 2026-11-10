@@ -9,7 +9,8 @@
 #      medio, reinicio en frío, resumen, --limpiar y rollback
 #   4  GlusterFS: --glusterfs y --gluster-cluster
 #   5  --listar, --eliminar y --eliminar-todo
-#   6  asistente (--menu)
+#   6  asistente (--menu); los de ci-provision.bats se omiten (skip) y están, con
+#      el nombre «ssoo-us asistente: …», en asistente.bats
 0	ci-provision.sh está al día respecto a src/ y lib/
 0	auditoría 18: los fuentes funcionan sin generar el script (src/main.sh carga todas las librerías)
 1	muestra la ayuda con -h y con --help
@@ -165,3 +166,15 @@
 6	auditoría 21: el asistente rechaza nombres que empiezan por '-' y la ficha respeta --prefijo
 6	3.0.3: Ctrl+C en lo que lanza el asistente lo interrumpe y lo deshace
 6	3.0.3: la lista del asistente ve lo creado desde el propio menú
+6	3.0.4: la lista del asistente cabe en el cuadro y no repite «imagen cloud»
+6	ssoo-us asistente: construye el comando, lo ejecuta y vuelve al menú
+6	ssoo-us asistente: el clúster deja elegir la imagen de la base y los discos de crea-entorno.sh
+6	ssoo-us asistente: salir del menú principal no hace nada
+6	ssoo-us asistente: almacenamiento extra pide el nombre, sugiere la IP .2 y marca los discos; eliminar elige de la lista
+6	ssoo-us asistente: la lista muestra máquinas y discos sueltos, con ficha al elegir
+6	ssoo-us asistente: la lista no se sale del cuadro ni repite «imagen cloud»
+6	ssoo-us asistente: Ctrl+C en lo que lanza lo interrumpe y lo deshace
+6	ssoo-us asistente: la lista ve lo creado desde el propio menú
+6	ssoo-us asistente: la contraseña no se muestra en el comando; sin prompt_toolkit, error 38; sin más opciones
+6	ssoo-us asistente: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes
+6	ssoo-us asistente: rechaza nombres que empiezan por '-' y la ficha respeta --prefijo

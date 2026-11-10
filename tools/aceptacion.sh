@@ -1,6 +1,7 @@
 #!/bin/bash
 # Tests de aceptación de «ssoo-us provision»: los de bats de ci-provision,
-# importados en tests/aceptacion/ (ver DESARROLLO.md).
+# importados en tests/aceptacion/, y los del asistente de ssoo-us
+# (tests/aceptacion/asistente.bats). Ver DESARROLLO.md.
 #
 #   bash tools/aceptacion.sh                    todos
 #   bash tools/aceptacion.sh --fase 2           los de las fases 0, 1 y 2 del port
@@ -40,4 +41,4 @@ if [[ "${1:-}" == --fase ]]; then
     set -- -f "^($filtro)\$" "$@"
 fi
 
-exec "$BATS" "$@" "$RAIZ/tests/aceptacion/ci-provision.bats"
+exec "$BATS" "$@" "$RAIZ/tests/aceptacion/ci-provision.bats" "$RAIZ/tests/aceptacion/asistente.bats"

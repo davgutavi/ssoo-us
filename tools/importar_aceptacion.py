@@ -89,6 +89,23 @@ OMITIDOS = {
     "auditoría 18: los fuentes funcionan sin generar el script (src/main.sh carga todas las librerías)":
         "ssoo-us no tiene fuentes en bash",
 }
+# El asistente de ssoo-us usa prompt_toolkit, no whiptail: estos casos están,
+# con un guion de respuestas, en tests/aceptacion/asistente.bats
+ASISTENTE = "el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
+for _nombre in (
+        "--menu: el asistente construye el comando, lo ejecuta y vuelve al menú",
+        "--menu: el clúster deja elegir la imagen de la base y los discos de crea-entorno.sh",
+        "--menu: cancelar en el menú principal no hace nada",
+        "--menu: almacenamiento extra pide el nombre, sugiere la IP .2 y marca los discos; "
+        "eliminar elige de la lista",
+        "--menu: la lista gráfica muestra máquinas y discos sueltos, con ficha al elegir",
+        "3.0.3: Ctrl+C en lo que lanza el asistente lo interrumpe y lo deshace",
+        "3.0.3: la lista del asistente ve lo creado desde el propio menú",
+        "3.0.4: la lista del asistente cabe en el cuadro y no repite «imagen cloud»",
+        "--menu: la contraseña no se muestra en el comando; sin whiptail, error 38; sin más opciones",
+        "auditoría 5 y 6: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes",
+        "auditoría 21: el asistente rechaza nombres que empiezan por '-' y la ficha respeta --prefijo"):
+    OMITIDOS[_nombre] = ASISTENTE
 
 
 class ErrorDeImportacion(Exception):

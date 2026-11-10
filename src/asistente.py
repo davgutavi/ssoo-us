@@ -1,71 +1,46 @@
 # --- provision: el asistente con menús (--menu, o sin argumentos desde una terminal)
 #
-# Para quien no se sabe las opciones: unos diálogos de whiptail (el programa de
-# menús de texto que trae Ubuntu) construyen el comando equivalente, lo enseñan y
-# lo ejecutan. Toda la lógica sigue en el mismo sitio: el asistente solo elige
-# los argumentos, enseña el comando equivalente y lo lanza en otro proceso.
+# Para quien no se sabe las opciones: unas pantallas (pantallas.py) construyen
+# el comando equivalente, lo enseñan y lo ejecutan. Toda la lógica sigue en el
+# mismo sitio: el asistente solo elige los argumentos, enseña el comando
+# equivalente y lo lanza en otro proceso.
+#
+# Cada caso es una serie de pasos: «Siguiente» avanza, «Atrás» vuelve al paso
+# anterior (con lo que ya se había escrito) y, desde el primero, al menú
+# principal. Ctrl+C sale del asistente.
 
-# Colores de los diálogos: la paleta clásica de newt (fondo azul, ventanas
-# grises). Si el usuario tiene NEWT_COLORS definida, se respeta la suya.
-PALETA_ASISTENTE = """
-root=white,blue
-roottext=white,blue
-helpline=white,blue
-window=black,lightgray
-border=black,lightgray
-shadow=black,black
-title=blue,lightgray
-textbox=black,lightgray
-label=black,lightgray
-listbox=black,lightgray
-actlistbox=white,blue
-sellistbox=black,cyan
-actsellistbox=white,blue
-checkbox=black,lightgray
-actcheckbox=white,blue
-entry=black,cyan
-button=black,cyan
-actbutton=white,blue
-compactbutton=black,lightgray
-"""
+SIGUIENTE = "<siguiente>"
+REPETIR = "<repetir>"
+OMITIR = "<omitir>"
+ANCHO_LISTA = 72
 
 
-def locale_utf8():
-    """Los diálogos de whiptail necesitan una locale UTF-8 (si no, cortan los
-    textos en la primera tilde): la del usuario si lo es, o C.UTF-8."""
-    loc = os.environ.get("LC_ALL") or os.environ.get("LANG") or ""
-    if "utf-8" in loc.lower() or "utf8" in loc.lower():
-        return loc
-    return "C.UTF-8"
+def opciones_maquina():
+    return [("extra-disks", "Seis discos extra vdb..vdg de %s" % TAM_DISCO_EXTRA),
+            ("ssh-pass", "Contraseña para administrador y SSH por contraseña"),
+            ("no-root", "No habilitar al usuario root"),
+            ("no-virt-viewer", "Sin consola gráfica (virt-viewer)"),
+            ("limpiar", "Eliminar antes lo que ya exista con esos nombres")]
 
 
-def wt(*argumentos):
-    """whiptail con estos argumentos: (código, selección). Código 0 aceptar, 1
-    cancelar, 255 Esc. whiptail dibuja por su salida estándar (aquí, la de
-    errores, que es la terminal) y escribe la selección por la de errores."""
-    entorno = dict(os.environ, NEWT_COLORS=os.environ.get("NEWT_COLORS") or PALETA_ASISTENTE,
-                   LC_ALL=locale_utf8())
-    sys.stdout.flush()
-    sys.stderr.flush()
-    p = subprocess.run(["whiptail", "--title", "%s %s" % (PROGRAMA, VERSION)]
-                       + [str(a) for a in argumentos],
-                       stdout=sys.stderr.fileno(), stderr=subprocess.PIPE, env=entorno)
-    # Como $(...): sin los saltos de línea del final
-    return p.returncode, p.stderr.decode("utf-8", "replace").rstrip("\n")
+def opciones_cluster():
+    return [("limpiar", "Eliminar antes los nodos y la imagen base si ya existen"),
+            ("discos-crea-entorno", "%d discos por nodo (vdb..vdh), como crea-entorno.sh"
+             % len(UNIDADES_POSIBLES_NODO)),
+            ("ssh-pass", "Contraseña para administrador y SSH por contraseña"),
+            ("no-root", "No habilitar al usuario root"),
+            ("no-virt-viewer", "Sin consola gráfica (virt-viewer)")]
 
 
-def wt_aviso(*argumentos):
-    """whiptail fuera de $(...) en ci-provision.sh (--msgbox, --yesno): lo que
-    devuelva va a la salida. True si se ha aceptado."""
-    codigo, salida = wt(*argumentos)
-    if salida:
-        sys.stdout.write(salida)
-    return codigo == 0
-
-
-def etiquetas(salida):
-    """La salida de un --checklist («"a" "b"») → etiquetas sueltas."""
-    return salida.replace('"', "").split()
+IMAGENES_MAQUINA = (
+    ("noble", "Ubuntu 24.04 (la imagen por defecto)"),
+    ("debian12", "Debian 12 (la del boletín 1)"),
+)
+IMAGENES_GLUSTER = (
+    ("noble", "Imagen cloud de Ubuntu 24.04, la misma que SERVER1 (recomendada)"),
+    ("ubuntu-base", "ubuntu-base.qcow2 del boletín 1, como la construcción manual"),
+    ("debian12", "Imagen cloud de Debian 12"),
+)
 
 
 def ips_libres_texto(o):
@@ -90,31 +65,50 @@ def salir_asistente():
     raise FinProvision(0)
 
 
-class Asistente:
-    """Lo que el asistente recuerda entre diálogos."""
+def recorrer(pasos):
+    """Los pasos de un caso, cada uno una función que devuelve SIGUIENTE, ATRAS,
+    REPETIR (el mismo paso otra vez), OMITIR (no hace falta: se pasa en el
+    sentido en que se iba) o SALIR. True si se llega al final; False si se
+    vuelve atrás desde el primero."""
+    i, adelante = 0, True
+    while 0 <= i < len(pasos):
+        r = pasos[i]()
+        if r == SALIR:
+            salir_asistente()
+        elif r == ATRAS:
+            i, adelante = i - 1, False
+        elif r == OMITIR:
+            i += 1 if adelante else -1
+        elif r != REPETIR:
+            i, adelante = i + 1, True
+    return i >= len(pasos)
 
-    def __init__(self, o):
+
+class Asistente:
+    """Lo que el asistente recuerda entre pantallas."""
+
+    def __init__(self, o, pantallas=None):
         self.o = o
+        self.p = pantallas or pantallas_del_asistente()
         self.pass_asistente = ""   # la contraseña elegida, para el proceso hijo
-        self.opciones_args = []
-        self.imagen_args = []
 
     def ejecutar(self):
+        ultima = None
         while True:
-            codigo, sel = wt("--notags", "--menu",
-                             "¿Qué quieres hacer?\n(muévete con las flechas y elige con Enter)",
-                             20, 78, 8,
-                             "basica", "Crear una máquina básica (boletín 1; Debian 12 propuesta)",
-                             "extra", "Crear una máquina con IP .2 y 6 discos extra (boletín 2, "
-                                      "epígrafe 2.1)",
-                             "cluster", "Crear la infraestructura GlusterFS (boletín 2, epígrafe 2.4)",
-                             "base", "Crear solo la imagen base GlusterFS",
-                             "listar", "Mostrar mis máquinas virtuales",
-                             "eliminar", "Eliminar una máquina virtual (y su almacenamiento)",
-                             "todo", "Eliminar todas mis máquinas virtuales (y su almacenamiento)",
-                             "salir", "Salir")
-            if codigo != 0:
+            sel = self.p.menu(
+                "¿Qué quieres hacer?",
+                [("basica", "Crear una máquina (Ubuntu 24.04 o Debian 12)"),
+                 ("extra", "Crear SERVER1 del boletín 2: IP .2 y 6 discos extra (2.1)"),
+                 ("cluster", "Crear la infraestructura GlusterFS (boletín 2, 2.4)"),
+                 ("base", "Crear solo la imagen base GlusterFS"),
+                 ("listar", "Ver mis máquinas virtuales y los discos del silo"),
+                 ("eliminar", "Eliminar máquinas virtuales (con sus discos)"),
+                 ("todo", "Eliminar todas mis máquinas virtuales (con sus discos)"),
+                 ("salir", "Salir")],
+                inicial=ultima, atras="Salir", seguir="Aceptar")
+            if sel in (ATRAS, SALIR, "salir"):
                 salir_asistente()
+            ultima = sel
             if sel in ("basica", "extra"):
                 self.maquina(sel)
             elif sel == "cluster":
@@ -126,187 +120,215 @@ class Asistente:
             elif sel == "eliminar":
                 self.eliminar()
             elif sel == "todo":
-                self.lanzar(["--eliminar-todo"])
-            else:
-                salir_asistente()
+                recorrer([lambda: self.lanzar(["--eliminar-todo"])])
 
-    # --- Piezas comunes ---
+    # --- Pasos comunes ---
 
-    def opciones_a_argumentos(self, salida):
-        """Opciones marcadas en un checklist → argumentos (la contraseña se pide
-        aparte). False si se cancela. La contraseña no va en los argumentos
-        (cualquier usuario del servidor la vería con 'ps'): se guarda para el
-        hijo y la orden lleva «--ssh-pass -»."""
-        self.opciones_args, self.pass_asistente = [], ""
-        for opcion in etiquetas(salida):
-            if opcion == "ssh-pass":
-                codigo, contrasena = wt("--passwordbox",
-                                        "Contraseña para administrador\n(solo letras sin tilde, "
-                                        "números y signos básicos):", 10, 70)
-                if codigo != 0 or not contrasena:
-                    return False
-                self.pass_asistente = contrasena
-                self.opciones_args += ["--ssh-pass", "-"]
-            elif opcion == "discos-crea-entorno":
-                self.opciones_args += ["--discos-nodo", str(len(UNIDADES_POSIBLES_NODO))]
-            else:
-                self.opciones_args.append("--" + opcion)
-        return True
+    def paso_nombre(self, s, pregunta):
+        def paso():
+            r = self.p.texto(pregunta, s["nombre"])
+            if r in (ATRAS, SALIR):
+                return r
+            r = r.strip()
+            if not self.nombre_valido(r):
+                return REPETIR
+            s["nombre"] = r
+            return SIGUIENTE
+        return paso
 
-    def elegir_imagen_maquina(self, preseleccionada):
-        """Imagen de una máquina suelta: deja --imagen en imagen_args (nada si es
-        la de por defecto). False si se cancela."""
-        def marca(opcion):
-            return "on" if opcion == preseleccionada else "off"
-        self.imagen_args = []
-        codigo, img = wt("--notags", "--radiolist",
-                         "Sistema de la máquina (marca con la barra espaciadora):", 11, 76, 2,
-                         "noble", "Ubuntu 24.04 (boletín 2)", marca("noble"),
-                         "debian12", "Debian 12 (boletín 1)", marca("debian12"))
-        if codigo != 0:
-            return False
-        if img and img != IMAGEN_DEFECTO:
-            self.imagen_args = ["--imagen", img]
-        return True
+    def paso_imagen(self, s, imagenes, texto):
+        def paso():
+            if s.get("usar_base"):
+                return OMITIR
+            r = self.p.elegir_uno(texto, list(imagenes), s["imagen"])
+            if r in (ATRAS, SALIR):
+                return r
+            s["imagen"] = r
+            return SIGUIENTE
+        return paso
 
-    def elegir_imagen_gluster(self):
-        """De qué imagen sale la base GlusterFS (mismo convenio que la anterior)."""
-        self.imagen_args = []
-        codigo, img = wt("--notags", "--radiolist",
-                         "¿De qué imagen sale la base GlusterFS?\n(marca con la barra espaciadora)",
-                         13, 78, 3,
-                         "noble", "Imagen cloud de Ubuntu 24.04, la misma que SERVER1 (recomendada)",
-                         "on",
-                         "ubuntu-base", "ubuntu-base.qcow2 del boletín 1, como la construcción manual",
-                         "off",
-                         "debian12", "Imagen cloud de Debian 12", "off")
-        if codigo != 0:
-            return False
-        if img and img != IMAGEN_DEFECTO_GLUSTER:
-            self.imagen_args = ["--imagen", img]
-        return True
+    def paso_opciones(self, s, opciones):
+        def paso():
+            r = self.p.elegir_varios("Opciones (márcalas con Espacio o con el ratón):",
+                                     list(opciones), s["opciones"])
+            if r in (ATRAS, SALIR):
+                return r
+            s["opciones"] = r
+            return SIGUIENTE
+        return paso
 
-    @staticmethod
-    def nombre_valido(nombre):
+    def paso_contrasena(self, s):
+        """Solo si se ha marcado ssh-pass. La contraseña no va en la orden
+        (cualquier usuario del servidor la vería con 'ps'): se le pasa al proceso
+        hijo, y la orden lleva «--ssh-pass -»."""
+        def paso():
+            if "ssh-pass" not in s["opciones"]:
+                return OMITIR
+            r = self.p.texto("Contraseña para administrador (solo letras sin tilde, números y "
+                             "signos básicos):", s["contrasena"], oculto=True)
+            if r in (ATRAS, SALIR):
+                return r
+            if not r:
+                self.p.aviso("Escribe una contraseña, o vuelve atrás y desmarca la opción.")
+                return REPETIR
+            s["contrasena"] = r
+            return SIGUIENTE
+        return paso
+
+    def nombre_valido(self, nombre):
         """Nombre corto válido; si no lo es, lo dice (un nombre que empezara por
         '-' se tomaría además por una opción)."""
         if re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?", nombre) and len(nombre) <= 63:
             return True
-        wt_aviso("--msgbox", "El nombre '%s' no es válido: solo letras, números y guiones, "
-                             "empezando\npor letra o número (p.ej. server1)." % nombre, 9, 72)
+        self.p.aviso("El nombre '%s' no es válido: solo letras, números y guiones, empezando "
+                     "por letra o número (p.ej. server1)." % nombre)
         return False
+
+    @staticmethod
+    def argumentos_de(s, imagen_defecto):
+        """Las opciones elegidas, como argumentos de provision."""
+        argumentos = []
+        if s.get("imagen") and s["imagen"] != imagen_defecto and not s.get("usar_base"):
+            argumentos += ["--imagen", s["imagen"]]
+        for opcion in s.get("opciones", []):
+            if opcion == "ssh-pass":
+                argumentos += ["--ssh-pass", "-"]
+            elif opcion == "discos-crea-entorno":
+                argumentos += ["--discos-nodo", str(len(UNIDADES_POSIBLES_NODO))]
+            else:
+                argumentos.append("--" + opcion)
+        return argumentos
 
     # --- Cada entrada del menú ---
 
     def maquina(self, modo):
         """basica | extra (IP .2 sugerida y discos extra marcados)."""
         o = self.o
-        codigo, nombre = wt("--inputbox", "Nombre corto de la máquina (letras, números y "
-                                          "guiones).\nEl dominio será %s-NOMBRE y el disco "
-                                          "NOMBRE.qcow2." % o.prefijo_dominio, 11, 70, "server1")
-        if codigo != 0 or not nombre or not self.nombre_valido(nombre):
-            return
+        s = {"nombre": "server1", "ip": ip_de_la_red(o, 2) if modo == "extra" else "",
+             "imagen": IMAGEN_DEFECTO, "opciones": ["extra-disks"] if modo == "extra" else [],
+             "contrasena": ""}
 
-        sugerida = ip_de_la_red(o, 2) if modo == "extra" else ""
-        libres = ips_libres_texto(o)
-        texto = "IP fija dentro de tu red virtual. Déjala vacía para usar DHCP."
-        if libres:
-            texto += "\nIPs libres de tu red:\n" + libres
-        codigo, ip = wt("--inputbox", texto, 16, 70, sugerida)
-        if codigo != 0:
-            return
+        def paso_ip():
+            texto = "IP fija dentro de tu red virtual. Déjala vacía para usar DHCP."
+            libres = ips_libres_texto(o)
+            if libres:
+                texto += "\nIPs libres de tu red:\n" + libres
+            r = self.p.texto(texto, s["ip"])
+            if r in (ATRAS, SALIR):
+                return r
+            s["ip"] = r.strip()
+            return SIGUIENTE
 
-        # El boletín 1 usa Debian 12; el 2, Ubuntu 24.04
-        if not self.elegir_imagen_maquina("debian12" if modo == "basica" else "noble"):
-            return
+        def paso_lanzar():
+            argumentos = self.argumentos_de(s, IMAGEN_DEFECTO) + [s["nombre"]]
+            if s["ip"]:
+                argumentos.append(s["ip"])
+            return self.lanzar(argumentos, s["contrasena"] if "ssh-pass" in s["opciones"] else "")
 
-        marcado = "on" if modo == "extra" else "off"
-        codigo, sel = wt("--checklist", "Opciones (marca con la barra espaciadora):", 16, 76, 5,
-                         "extra-disks", "Seis discos extra vdb..vdg de %s" % TAM_DISCO_EXTRA, marcado,
-                         "ssh-pass", "Contraseña para administrador y SSH por contraseña", "off",
-                         "no-root", "No habilitar al usuario root", "off",
-                         "no-virt-viewer", "Sin consola gráfica (virt-viewer)", "off",
-                         "limpiar", "Eliminar antes lo que ya exista con esos nombres", "off")
-        if codigo != 0 or not self.opciones_a_argumentos(sel):
-            return
-
-        argumentos = self.imagen_args + self.opciones_args + [nombre]
-        if ip:
-            argumentos.append(ip)
-        self.lanzar(argumentos)
+        recorrer([
+            self.paso_nombre(s, "Nombre corto de la máquina (letras, números y guiones).\n"
+                                "El dominio será %s-NOMBRE y el disco NOMBRE.qcow2."
+                                % o.prefijo_dominio),
+            paso_ip,
+            self.paso_imagen(s, IMAGENES_MAQUINA, "Sistema de la máquina:"),
+            self.paso_opciones(s, opciones_maquina()),
+            self.paso_contrasena(s),
+            paso_lanzar,
+        ])
 
     def cluster(self):
         o = self.o
-        argumentos = ["--gluster-cluster"]
-        usar_base = False
         base = disco_base_cluster(o)
-        if os.path.isfile(base):
-            if wt_aviso("--yesno", "Ya tienes %s en el silo.\n¿Quieres usarla como imagen base, "
-                                   "sin volver a construirla?" % os.path.basename(base), 10, 70):
-                argumentos += ["--base", os.path.basename(base)]
-                usar_base = True
-        if not usar_base:
-            if not self.elegir_imagen_gluster():
-                return
-            argumentos += self.imagen_args
+        hay_base = os.path.isfile(base)
+        s = {"usar_base": hay_base, "imagen": IMAGEN_DEFECTO_GLUSTER, "opciones": [],
+             "contrasena": ""}
 
-        codigo, sel = wt("--checklist", "Opciones (marca con la barra espaciadora):", 15, 78, 5,
-                         "limpiar", "Eliminar antes los nodos y la imagen base si ya existen", "off",
-                         "discos-crea-entorno", "%d discos por nodo (vdb..vdh), como crea-entorno.sh"
-                         % len(UNIDADES_POSIBLES_NODO), "off",
-                         "ssh-pass", "Contraseña para administrador y SSH por contraseña", "off",
-                         "no-root", "No habilitar al usuario root", "off",
-                         "no-virt-viewer", "Sin consola gráfica (virt-viewer)", "off")
-        if codigo != 0 or not self.opciones_a_argumentos(sel):
-            return
-        self.lanzar(argumentos + self.opciones_args)
+        def paso_base():
+            if not hay_base:
+                return OMITIR
+            r = self.p.elegir_uno("Ya tienes %s en el silo." % os.path.basename(base),
+                                  [("usar", "Usarla como imagen base, sin volver a construirla"),
+                                   ("nueva", "Construir la imagen base de nuevo")],
+                                  "usar" if s["usar_base"] else "nueva")
+            if r in (ATRAS, SALIR):
+                return r
+            s["usar_base"] = r == "usar"
+            return SIGUIENTE
+
+        def paso_lanzar():
+            argumentos = ["--gluster-cluster"]
+            if s["usar_base"]:
+                argumentos += ["--base", os.path.basename(base)]
+            argumentos += self.argumentos_de(s, IMAGEN_DEFECTO_GLUSTER)
+            return self.lanzar(argumentos, s["contrasena"] if "ssh-pass" in s["opciones"] else "")
+
+        recorrer([
+            paso_base,
+            self.paso_imagen(s, IMAGENES_GLUSTER, "¿De qué imagen sale la base GlusterFS?"),
+            self.paso_opciones(s, opciones_cluster()),
+            self.paso_contrasena(s),
+            paso_lanzar,
+        ])
 
     def base(self):
-        codigo, nombre = wt("--inputbox", "Nombre de la imagen base.\nQuedará NOMBRE.qcow2 en el "
-                                          "silo, sin máquina, lista para hacer copias.", 11, 70,
-                            CLUSTER_BASE)
-        if codigo != 0 or not nombre or not self.nombre_valido(nombre):
-            return
-        if not self.elegir_imagen_gluster():
-            return
-        argumentos = ["--glusterfs"] + self.imagen_args
-        if wt_aviso("--defaultno", "--yesno", "Si ya existe una máquina o un disco con ese "
-                                              "nombre,\n¿eliminarlos antes (--limpiar)?", 9, 70):
-            argumentos.append("--limpiar")
-        self.lanzar(argumentos + [nombre])
+        s = {"nombre": CLUSTER_BASE, "imagen": IMAGEN_DEFECTO_GLUSTER, "opciones": []}
+
+        def paso_lanzar():
+            argumentos = ["--glusterfs"] + self.argumentos_de(s, IMAGEN_DEFECTO_GLUSTER)
+            return self.lanzar(argumentos + [s["nombre"]])
+
+        recorrer([
+            self.paso_nombre(s, "Nombre de la imagen base.\nQuedará NOMBRE.qcow2 en el silo, "
+                                "sin máquina, lista para hacer copias."),
+            self.paso_imagen(s, IMAGENES_GLUSTER, "¿De qué imagen sale la base GlusterFS?"),
+            self.paso_opciones(s, [("limpiar", "Eliminar antes la máquina o el disco que ya se "
+                                               "llamen así")]),
+            paso_lanzar,
+        ])
+
+    def filas_de_la_lista(self):
+        """[(clave, fila)] de «Ver mis máquinas»: m:DOMINIO o d:RUTA, con filas que
+        caben en el cuadro."""
+        o = self.o
+        filas = []
+        for d in dominios_propios(o):
+            estado = estado_dominio(d)
+            ip = ip_dominio(d) if estado == "en ejecución" else "-"
+            n = len(discos_de_dominio(o, d))
+            filas.append(("m:" + d, "%s %s %s %d disco(s)" % (
+                rellenar(d[len(o.prefijo_dominio) + 1:], 16), rellenar(estado, 12),
+                rellenar(ip, 15), n)))
+        for f in discos_sin_maquina(o):
+            if imagen_protegida(o, f):
+                # La explicación entera («no la borres»), en su ficha
+                sistema = "Debian 12" if f.endswith("/" + IMAGEN_DEBIAN) else "Ubuntu 24.04"
+                fila = "%s  [imagen cloud] %s" % (os.path.basename(f), sistema)
+            else:
+                fila = "%s  [sin máquina] %s" % (os.path.basename(f),
+                                                 descripcion_disco_suelto(o, f))
+            filas.append(("d:" + f, fila))
+        return [(clave, recortar(fila, ANCHO_LISTA)) for clave, fila in filas]
 
     def listar(self):
         """Lista de máquinas y discos sueltos; al elegir uno se abre su ficha."""
         o = self.o
         # Las imágenes base se vuelven a leer cada vez: tras crear o eliminar
-        # algo desde el asistente, la lista tiene que verlo (ci-provision lo
-        # corrigió en la 3.0.3)
+        # algo desde el asistente, la lista tiene que verlo
         o.respaldos = None
         cargar_respaldos(o)
-
-        items = []
-        for d in dominios_propios(o):
-            estado = estado_dominio(d)
-            ip = ip_dominio(d) if estado == "en ejecución" else "-"
-            n = len(discos_de_dominio(o, d))
-            items += ["m:" + d, "%s %s %s %d disco(s)" % (
-                rellenar(d[len(o.prefijo_dominio) + 1:], 14), rellenar(estado, 12),
-                rellenar(ip, 15), n)]
-        for f in discos_sin_maquina(o):
-            tipo = "imagen cloud" if imagen_protegida(o, f) else "sin máquina"
-            items += ["d:" + f, "%s %s %s" % (rellenar(os.path.basename(f), 14), rellenar(tipo, 12),
-                                              descripcion_disco_suelto(o, f))]
-
-        if not items:
-            wt_aviso("--msgbox", "No tienes máquinas ni discos en el silo.", 8, 60)
+        filas = self.filas_de_la_lista()
+        if not filas:
+            self.p.aviso("No tienes máquinas ni discos en el silo.")
             return
-
+        ultima = None
         while True:
-            codigo, sel = wt("--notags", "--menu", "Mis máquinas virtuales y los discos del "
-                                                   "silo.\nElige una entrada para ver su ficha; "
-                                                   "Cancelar para volver.", 22, 78, 12, *items)
-            if codigo != 0:
+            sel = self.p.menu("Tus máquinas virtuales y los discos del silo. Elige una para ver "
+                              "su ficha.", filas, inicial=ultima, atras="Volver", seguir="Ver ficha")
+            if sel == SALIR:
+                salir_asistente()
+            if sel == ATRAS:
                 return
+            ultima = sel
             if sel.startswith("m:"):
                 self.ficha_maquina(sel[2:])
             elif sel.startswith("d:"):
@@ -319,7 +341,6 @@ class Asistente:
         ip = ip_dominio(d) if estado == "en ejecución" else "-"
         texto = ("Máquina : %s   (hostname: %s)\nEstado  : %s\nIP      : %s\nDiscos  :"
                  % (d, corto, estado, ip))
-        n = 4
         discos = discos_de_dominio(o, d)
         if not discos:
             texto += " (ninguno en el silo)"
@@ -327,15 +348,12 @@ class Asistente:
             respaldo = respaldo_de(o, f)
             texto += "\n          %s%s" % (os.path.basename(f),
                                            " (copia de %s)" % respaldo if respaldo else "")
-            n += 1
         if ip != "-":
             texto += "\nAcceso  : ssh administrador@%s" % ip
-            n += 1
         texto += "\nConsola : virsh console %s" % d
-        texto += "\n\nPara eliminarla con sus discos: %s %s--eliminar %s" % (
+        texto += "\n\nPara eliminarla con sus discos:\n  %s %s--eliminar %s" % (
             orden_provision(), prefijo_en_orden(o), corto)
-        n += 3
-        wt_aviso("--msgbox", texto, n + 6, 78)
+        self.p.aviso(texto, boton="Volver")
 
     def ficha_disco(self, f):
         vs = tam_virtual(f)
@@ -343,32 +361,39 @@ class Asistente:
         if re.fullmatch(r"[0-9]+", vs):
             texto += "\nTamaño  : %d GiB (virtual)" % bytes_a_gib(int(vs))
         texto += "\nQué es  : %s" % descripcion_disco_suelto(self.o, f)
-        wt_aviso("--msgbox", texto, 11, 78)
+        self.p.aviso(texto, boton="Volver")
 
     def eliminar(self):
         o = self.o
-        items = []
-        for d in dominios_propios(o):
-            items += [d[len(o.prefijo_dominio) + 1:], estado_dominio(d), "off"]
-        if not items:
-            wt_aviso("--msgbox", "No tienes máquinas (dominios %s-*).\nLos discos sueltos del silo "
-                                 "se ven en \"Mostrar mis máquinas virtuales\"\ny se eliminan con "
-                                 "\"Eliminar todas mis máquinas virtuales\"." % o.prefijo_dominio,
-                     11, 76)
+        maquinas = [(d[len(o.prefijo_dominio) + 1:], estado_dominio(d))
+                    for d in dominios_propios(o)]
+        if not maquinas:
+            self.p.aviso("No tienes máquinas (dominios %s-*). Los discos sueltos del silo se "
+                         "ven en «Ver mis máquinas virtuales» y se eliminan con «Eliminar todas "
+                         "mis máquinas virtuales»." % o.prefijo_dominio)
             return
-        codigo, sel = wt("--checklist", "Marca las máquinas a eliminar (con sus discos y sus "
-                                        "ficheros cloud-init):", 18, 72, 8, *items)
-        if codigo != 0:
-            return
-        nombres = etiquetas(sel)
-        if nombres:
-            self.lanzar(["--eliminar"] + nombres)
+        s = {"nombres": []}
+
+        def paso_elegir():
+            r = self.p.elegir_varios("Marca las máquinas a eliminar (con sus discos y sus "
+                                     "ficheros cloud-init):",
+                                     [(n, "%s  (%s)" % (n, e)) for n, e in maquinas], s["nombres"])
+            if r in (ATRAS, SALIR):
+                return r
+            if not r:
+                self.p.aviso("No has marcado ninguna máquina.")
+                return REPETIR
+            s["nombres"] = r
+            return SIGUIENTE
+
+        recorrer([paso_elegir, lambda: self.lanzar(["--eliminar"] + s["nombres"])])
 
     # --- Ejecución del comando elegido ---
 
-    def lanzar(self, argumentos):
+    def lanzar(self, argumentos, contrasena=""):
         """Enseña el comando equivalente, pide confirmación y lo ejecuta en un
-        proceso aparte (este mismo programa con esos argumentos)."""
+        proceso aparte (este mismo programa con esos argumentos). Devuelve ATRAS
+        o SALIR si no se confirma; SIGUIENTE, una vez ejecutado."""
         o = self.o
         if o.prefijo_opt:
             argumentos = ["--prefijo", o.prefijo_opt] + argumentos
@@ -384,8 +409,9 @@ class Asistente:
             mostrar += " ••••••" if anterior == "--ssh-pass" else " " + a
             anterior = a
 
-        if not wt_aviso("--yesno", "Se va a ejecutar:\n\n  %s\n\n¿Adelante?" % mostrar, 12, 76):
-            return
+        r = self.p.confirmar("Se va a ejecutar:\n\n%s\n\n¿Adelante?" % mostrar)
+        if r is not True:
+            return r
 
         sys.stdout.flush()
         try:
@@ -395,32 +421,31 @@ class Asistente:
         print("→ %s" % mostrar)
         print()
         entorno = dict(os.environ)
-        if self.pass_asistente:
-            entorno["CI_PROVISION_SSH_PASS"] = self.pass_asistente
+        if contrasena:
+            entorno["CI_PROVISION_SSH_PASS"] = contrasena
         # Ctrl+C lo atiende el proceso hijo, que deshace lo suyo; aquí no hace
         # nada. Con un manejador que no hace nada y no con SIG_IGN, que el hijo
         # heredaría: con la señal ignorada, el hijo no podría atrapar Ctrl+C y
-        # la creación lanzada desde el menú no se podría parar (como en
-        # ci-provision hasta la 3.0.2, con «trap '' INT»; la 3.0.3 usa «trap ':' INT»).
+        # la creación lanzada desde el menú no se podría parar.
         anterior_int = signal.signal(signal.SIGINT, lambda *_: None)
         try:
             codigo = subprocess.call([sys.executable, ruta_del_programa(), "provision"] + argumentos,
                                      env=entorno)
         finally:
             signal.signal(signal.SIGINT, anterior_int)
-        self.pass_asistente = ""
         if codigo < 0:
             codigo = 128 - codigo
         print()
         if codigo != 0:
             print("(el comando ha terminado con el código %d)" % codigo)
         pausa()
+        return SIGUIENTE
 
 
 def pausa():
-    """«read -r -p "Pulsa Enter…"»: el texto por la salida de errores, solo si la
-    entrada es una terminal; se lee byte a byte, como bash, para no quitarle al
-    siguiente proceso lo que venga después en la entrada."""
+    """«Pulsa Enter…»: el texto por la salida de errores, solo si la entrada es
+    una terminal; se lee byte a byte, para no quitarle al siguiente proceso lo
+    que venga después en la entrada."""
     if sys.stdin.isatty():
         sys.stderr.write("Pulsa Enter para volver al menú… ")
         sys.stderr.flush()
@@ -432,8 +457,9 @@ def pausa():
 
 
 def asistente(o):
-    if not shutil.which("whiptail"):
-        fallar(38, "El asistente (--menu) necesita el programa 'whiptail', que no está en este "
-                   "equipo\n(en los servidores de la asignatura sí está). Usa las opciones de la "
-                   "línea de comandos: %s -h" % orden_provision())
+    if not os.environ.get("SSOO_US_ASISTENTE_GUION") and not prompt_toolkit_disponible():
+        fallar(38, "El asistente (--menu) necesita el módulo prompt_toolkit de Python (el paquete "
+                   "python3-prompt-toolkit),\nque no está en este equipo (en los servidores de la "
+                   "asignatura sí está). Usa las opciones\nde la línea de comandos: %s -h"
+                   % orden_provision())
     Asistente(o).ejecutar()

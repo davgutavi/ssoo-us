@@ -62,6 +62,10 @@ for modulo in yaml libvirt; do
         echo "AVISO: $PY no tiene el módulo $modulo: diagnosis no podrá hacer toda la revisión."
     fi
 done
+if ! "$PY" -c "import prompt_toolkit" 2>/dev/null; then
+    echo "AVISO: $PY no tiene prompt_toolkit: el asistente (ssoo-us provision --menu) no se"
+    echo "       abrirá. Instálalo con: sudo apt install python3-prompt-toolkit"
+fi
 
 antes="$(version "$DESTINO/bin/ssoo-us")"
 instalar_archivo "$SSOO_US" "$DESTINO/bin/ssoo-us"

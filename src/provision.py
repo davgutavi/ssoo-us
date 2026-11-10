@@ -942,7 +942,7 @@ def provision(argv):
 def ejecutar_provision(o, argv):
     """El flujo de main() en ci-provision.sh. Devuelve el código de salida."""
     # Sin argumentos y desde una terminal: el asistente con menús
-    if not argv and sys.stdin.isatty() and sys.stdout.isatty() and shutil.which("whiptail"):
+    if not argv and sys.stdin.isatty() and sys.stdout.isatty() and prompt_toolkit_disponible():
         argv = ["--menu"]
     analizar_opciones(o, argv)
     validar_opciones(o)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # ARCHIVO GENERADO por tools/importar_aceptacion.py a partir de
-# ci-provision/test/ci-provision.bats (e16e1ce). No lo edite a mano: vuelva a importarlo.
+# ci-provision/test/ci-provision.bats (9c4bcda). No lo edite a mano: vuelva a importarlo.
 # Las diferencias con el original están en la lista SUSTITUCIONES del
 # importador.
 # Tests locales de ci-provision.sh. No necesitan libvirt: virsh y virt-install
@@ -844,12 +844,15 @@ qinfo() {
 }
 
 @test "--menu: el asistente construye el comando, lo ejecuta y vuelve al menú" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "0 basica" "0 server1" "0 " "0 debian12" "0 \"extra-disks\" \"no-root\"" "0" "0 salir" > "$MOCK_WHIPTAIL"
     run bash "$SCRIPT" --menu </dev/null
     assert_success
-    # La máquina básica es la del boletín 1: Debian 12 aparece marcada
-    grep -q -- '--radiolist .* noble Ubuntu 24.04 (boletín 2) off debian12 Debian 12 (boletín 1) on$' "$MOCK_STATE/log"
+    # 3.0.4: la máquina básica propone la imagen por defecto (Ubuntu 24.04)
+    grep -q -- '--radiolist .* noble Ubuntu 24.04 (boletín 2) on debian12 Debian 12 (boletín 1) off$' "$MOCK_STATE/log"
+    # Botones en español
+    grep -q -- '--ok-button Aceptar --cancel-button Cancelar --yes-button Sí --no-button No' "$MOCK_STATE/log"
     assert_output --partial "→ $ORDEN --imagen debian12 --extra-disks --no-root server1"
     assert_output --partial "Sin cambios."
     dominio_existe "${USUARIO}-server1"
@@ -859,6 +862,7 @@ qinfo() {
 }
 
 @test "--menu: el clúster deja elegir la imagen de la base y los discos de crea-entorno.sh" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "0 cluster" "0 debian12" "0 \"discos-crea-entorno\"" "0" "1" > "$MOCK_WHIPTAIL"
     run bash "$SCRIPT" --menu </dev/null
@@ -876,6 +880,7 @@ qinfo() {
 }
 
 @test "--menu: cancelar en el menú principal no hace nada" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "1" > "$MOCK_WHIPTAIL"
     run bash "$SCRIPT" --menu </dev/null
@@ -885,6 +890,7 @@ qinfo() {
 }
 
 @test "--menu: almacenamiento extra pide el nombre, sugiere la IP .2 y marca los discos; eliminar elige de la lista" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "0 extra" "0 server1" "0 192.168.7.2" "0 noble" "0 \"extra-disks\"" "0" "0 eliminar" "0 \"server1\"" "0" "1" > "$MOCK_WHIPTAIL"
     run bash "$SCRIPT" --menu --si </dev/null
@@ -900,6 +906,7 @@ qinfo() {
 }
 
 @test "--menu: la lista gráfica muestra máquinas y discos sueltos, con ficha al elegir" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     run bash "$SCRIPT" --extra-disks server1
     assert_success
     run bash "$SCRIPT" --imagen debian12 --glusterfs glusterbase
@@ -919,6 +926,7 @@ qinfo() {
 }
 
 @test "3.0.3: Ctrl+C en lo que lanza el asistente lo interrumpe y lo deshace" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     export MOCK_VIRT_INSTALL_CTRL_C=1
     printf '%s\n' "0 basica" "0 server1" "0 " "0 debian12" "0 \"no-root\"" "0" "1" > "$MOCK_WHIPTAIL"
@@ -931,6 +939,7 @@ qinfo() {
 }
 
 @test "3.0.3: la lista del asistente ve lo creado desde el propio menú" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     run bash "$SCRIPT" --imagen debian12 --glusterfs glusterbase
     assert_success
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
@@ -943,7 +952,40 @@ qinfo() {
     grep -q -- "          server1.qcow2 (copia de debian12.qcow2)" "$MOCK_STATE/log"
 }
 
+@test "3.0.4: la lista del asistente cabe en el cuadro y no repite «imagen cloud»" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
+    run bash "$SCRIPT" --imagen debian12 --glusterfs glusterbase
+    assert_success
+    run bash "$SCRIPT" --extra-disks un-nombre-de-maquina-bastante-largo
+    assert_success
+    export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
+    printf '%s\n' "0 listar" "1" "1" > "$MOCK_WHIPTAIL"
+    run bash "$SCRIPT" --menu </dev/null
+    assert_success
+    # El texto del menú lleva un salto de línea: las filas van en la siguiente
+    linea="$(grep -A1 -- '--notags --menu Mis máquinas virtuales' "$MOCK_STATE/log" | tail -n1)"
+    [[ "$linea" == *"noble-server-cloudimg-amd64.img imagen cloud Ubuntu 24.04"* ]]
+    [[ "$linea" == *"debian12.qcow2 imagen cloud Debian 12"* ]]
+    [[ "$linea" != *"imagen cloud imagen cloud"* ]]
+    # Cada fila es lo que va entre su etiqueta y la siguiente: ninguna pasa
+    # de 66 caracteres, y la de la máquina de nombre largo acaba en «…»
+    python3 - "$linea" "m:${USUARIO}-un-nombre-de-maquina-bastante-largo" \
+        "d:$SILO/debian12.qcow2" "d:$SILO/glusterbase.qcow2" "d:$SILO/noble-server-cloudimg-amd64.img" <<'PY'
+import sys
+linea, etiquetas = sys.argv[1], sys.argv[2:]
+pos = sorted((linea.index(" " + e + " "), e) for e in etiquetas)
+for k, (p, e) in enumerate(pos):
+    ini = p + len(e) + 2
+    fin = pos[k + 1][0] if k + 1 < len(pos) else len(linea)
+    fila = linea[ini:fin]
+    assert len(fila) <= 66, (e, len(fila), fila)
+    if e.startswith("m:"):
+        assert fila.endswith("…"), fila
+PY
+}
+
 @test "--menu: la contraseña no se muestra en el comando; sin whiptail, error 38; sin más opciones" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "0 basica" "0 web" "0 " "0 noble" "0 \"ssh-pass\"" "0 Secreta1" "0" "1" > "$MOCK_WHIPTAIL"
     run bash "$SCRIPT" --menu </dev/null
@@ -1595,6 +1637,7 @@ qinfo() {
 }
 
 @test "auditoría 5 y 6: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "0 basica" "0 web" "0 " "0 noble" "0 \"ssh-pass\"" "0 Secreta1" "0" "1" > "$MOCK_WHIPTAIL"
     # Un sitecustomize que anota los argumentos de cada python: así se ve qué
@@ -1768,6 +1811,7 @@ qinfo() {
 }
 
 @test "auditoría 21: el asistente rechaza nombres que empiezan por '-' y la ficha respeta --prefijo" {
+    skip "ssoo-us: el asistente usa prompt_toolkit, no whiptail: el caso está en asistente.bats"
     export MOCK_WHIPTAIL="$BATS_TEST_TMPDIR/respuestas"
     printf '%s\n' "0 basica" "0 -h" "0" "1" > "$MOCK_WHIPTAIL"
     run bash "$SCRIPT" --menu </dev/null

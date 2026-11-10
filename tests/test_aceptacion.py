@@ -16,10 +16,16 @@ class TestArnes(unittest.TestCase):
     def setUpClass(cls):
         cls.nombres = re.findall(r'^@test "(.*)" \{$',
                                  leer(os.path.join(ACEPTACION, "ci-provision.bats")), re.M)
+        cls.del_asistente = re.findall(r'^@test "(.*)" \{$',
+                                       leer(os.path.join(ACEPTACION, "asistente.bats")), re.M)
 
-    def test_155_tests(self):
-        self.assertEqual(len(self.nombres), 155)
-        self.assertEqual(len(set(self.nombres)), 155, "hay nombres de test repetidos")
+    def test_156_tests(self):
+        self.assertEqual(len(self.nombres), 156)
+        self.assertEqual(len(set(self.nombres)), 156, "hay nombres de test repetidos")
+
+    def test_los_del_asistente(self):
+        self.assertEqual(len(self.del_asistente), 11)
+        self.assertTrue(all(n.startswith("ssoo-us asistente: ") for n in self.del_asistente))
 
     def test_cada_test_en_una_fase(self):
         fases = {}
@@ -30,7 +36,7 @@ class TestArnes(unittest.TestCase):
             self.assertIn(fase, "0123456", linea)
             self.assertNotIn(nombre, fases, "repetido en fases.txt: %s" % nombre)
             fases[nombre] = fase
-        self.assertEqual(set(fases), set(self.nombres))
+        self.assertEqual(set(fases), set(self.nombres) | set(self.del_asistente))
 
     def test_envoltorio(self):
         envoltorio = os.path.join(ACEPTACION, "ssoo-us-provision")

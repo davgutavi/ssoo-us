@@ -146,9 +146,12 @@ las libres de tu red) y las opciones, y antes de ejecutar te muestra **el comand
 equivalente**, que es el que aprenderás a escribir. Todo lo que hace el
 asistente se puede hacer con las opciones de la tabla anterior.
 
-Se maneja con las flechas, `Tab` para pasar a los botones, la barra espaciadora
-para marcar opciones e `Intro` para aceptar. `Ctrl+C` interrumpe lo que se esté
-creando y lo deshace.
+Se maneja con el teclado o con el ratón: las flechas para moverte, la barra
+espaciadora (o un clic) para marcar opciones, `Intro` para seguir y `Tab` para
+pasar a los botones. Cada paso tiene los botones **«Atrás»** y **«Siguiente»**:
+«Atrás» (o `Esc`) vuelve al paso anterior sin perder lo que ya habías escrito y,
+desde el primero, al menú principal. `Ctrl+C` en una pantalla sale del
+asistente; mientras se crea una máquina, la interrumpe y deshace lo creado.
 
 ### Qué pasa al ejecutarlo
 

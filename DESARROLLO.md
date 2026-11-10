@@ -37,7 +37,9 @@ src/maquina.py    provision: orden de virt-install, plan, creación y resumen de
 src/cluster.py    provision: base GlusterFS (--glusterfs y fase 1 del clúster)
                   y --gluster-cluster
 src/gestion.py    provision: --listar, --eliminar y --eliminar-todo
-src/asistente.py  provision: el asistente con menús de whiptail (--menu)
+src/pantallas.py  provision: las pantallas del asistente (prompt_toolkit), y las
+                  de los tests (un guion de respuestas)
+src/asistente.py  provision: el asistente (--menu): los pasos de cada caso
 src/provision.py  provision: configuración, opciones, validaciones (también las
                   del entorno: libvirt, silo, red, IPs), flujo y marcha atrás
 src/diagnosis_base.py      diagnosis: Resultado (OK, AVISO, ERROR, --), Informe,
@@ -71,8 +73,11 @@ importaciones de la biblioteca estándar van todas en `base.py` (el primero;
 `main.py` va el último). Un test comprueba que `ssoo-us` está al día respecto a
 los fuentes, y otro que todo fuente de `src/` está en `ORDEN`.
 
-Solo biblioteca estándar, más lo que ya está en los servidores: PyYAML 5.4.1 y
-el módulo `libvirt` (`python3-libvirt`). Los servidores tienen Python 3.10; el
+Solo biblioteca estándar, más lo que está en los servidores: PyYAML 5.4.1, el
+módulo `libvirt` (`python3-libvirt`) y, solo para el asistente,
+`prompt_toolkit` 3.0.28 (`python3-prompt-toolkit`, que se instala con `apt`; se
+importa al abrir el asistente, no antes, y sin él `--menu` da el error 38). En
+el `.venv`: `pip install pyyaml==6.0.2 prompt_toolkit==3.0.28`. Los servidores tienen Python 3.10; el
 código tiene que ser válido en 3.8 (un test lo comprueba con
 `ast.parse(..., feature_version=(3, 8))`, pero no detecta funciones nuevas de la
 biblioteca, como `str.removeprefix`: no las uses). La primera línea es
@@ -122,8 +127,11 @@ Ningún test ni ejemplo puede llevar un UVUS real: el alumno de prueba es
 
 ### Tests de aceptación de `provision` (bats)
 
-Son los 155 tests de bats de `ci-provision`, sin tocar ni una línea de lo que
-comprueban: `ssoo-us provision` tiene que pasar los mismos que `ci-provision.sh`.
+Son los 156 tests de bats de `ci-provision` 3.0.4, sin tocar ni una línea de lo
+que comprueban: `ssoo-us provision` tiene que pasar los mismos que
+`ci-provision.sh`. Salvo los del asistente: el de `ci-provision` usa `whiptail`
+y el de `ssoo-us`, `prompt_toolkit`, así que sus 11 tests se quedan con `skip` y
+los mismos casos están en `tests/aceptacion/asistente.bats` (más abajo).
 
 Los tests de `ci-provision` lanzan el script siempre como `bash "$SCRIPT" ...`,
 y `test/helpers.bash` fija `SCRIPT="$REPO_DIR/ci-provision.sh"`. Aquí `SCRIPT`
@@ -136,6 +144,7 @@ sirvan.
 ```
 tests/aceptacion/
   ci-provision.bats    importado (no se edita)
+  asistente.bats       los del asistente de ssoo-us (estos sí se editan)
   helpers.bash         importado (no se edita)
   mocks/               importados (no se editan)
   ORIGEN               de qué commit de ci-provision salen
@@ -168,9 +177,10 @@ cuál. Las sustituciones son:
   mismo intérprete de Python, así que los anota un `sitecustomize.py` (en
   `PYTHONPATH`).
 - `--version` escribe `ssoo-us X.Y.Z` en vez de `ci-provision.sh X.Y.Z`.
-- Dos tests se conservan con `skip` (para que la numeración y los nombres sigan
-  siendo los de `ci-provision`): el que comprueba que `ci-provision.sh` está al
-  día respecto a sus fuentes en bash y el que ejecuta `src/main.sh`.
+- Trece tests se conservan con `skip` (para que la numeración y los nombres
+  sigan siendo los de `ci-provision`; lista `OMITIDOS`): el que comprueba que
+  `ci-provision.sh` está al día respecto a sus fuentes en bash, el que ejecuta
+  `src/main.sh` y los 11 del asistente.
 
 Para lanzarlos (hacen falta `qemu-img` y `jq`; en macOS:
 `brew install qemu jq`; y los submódulos, con `git submodule update --init`):
@@ -185,16 +195,36 @@ bash tools/aceptacion.sh --tap > /tmp/a.tap      # en formato TAP, para contarlo
 Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 (`SSOO_US_PYTHON` lo cambia). Tarda alrededor de un minuto.
 
-`tests/aceptacion/fases.txt` reparte los 155 tests entre las fases del port
+`tests/aceptacion/fases.txt` reparte los 156 tests (y los 11 de `asistente.bats`) entre las fases del port
 (una línea por test: la fase y su nombre exacto); las fases son acumulativas y
 `--fase N` lanza los de las fases 0 a N. Un test unitario comprueba que cada
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy pasan todos (153, y los 2 omitidos). Para comprobar el propio arnés se puede lanzar contra
+Hoy pasan todos: 143 de `ci-provision.bats` (y los 13 omitidos) y los 11 de
+`asistente.bats`. Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
 menos los seis que dependen de las sustituciones de `$ORDEN` y de `--version`.
+
+### Tests de aceptación del asistente (`asistente.bats`)
+
+Los mismos casos que los 11 del asistente de `ci-provision.bats`, con el mismo
+entorno y los mismos mocks, pero sin `whiptail`: el asistente toma las
+respuestas de un guion y anota cada pantalla en un registro.
+
+- `SSOO_US_ASISTENTE_GUION=FICHERO`: una línea por pantalla. La clave elegida
+  (en el menú y en «elegir una»; vacía, la marcada), las claves marcadas
+  separadas por espacios, el texto escrito, `si` para confirmar, o `<atrás>`
+  o `<salir>`. Sin más líneas, `<salir>`.
+- `SSOO_US_ASISTENTE_REGISTRO=FICHERO`: cada pantalla, en una línea
+  (`TIPO: texto | opciones`, con `*` en la marcada).
+
+Lo hace `PantallasGuion` (`src/pantallas.py`), que tiene las mismas operaciones
+que las pantallas de verdad (`PantallasPT`). Esas, con `prompt_toolkit`, las
+prueban los tests unitarios con una entrada de teclado simulada
+(`TestPantallas`, en `tests/test_provision_asistente.py`), junto con el flujo de
+cada caso (qué orden construye, que Atrás conserva lo escrito...).
 
 Los tests de `ci-provision` leen variables de entorno con el prefijo
 `CI_PROVISION_` (tiempos de espera, directorio compartido, clave pública, URI de
@@ -224,21 +254,27 @@ python3 tools/equivalencia.py RUTA/ci-provision.sh
 
 Necesita un bash 4 o posterior en el `PATH` (en macOS, el de Homebrew). Cada caso
 lleva la fase a partir de la cual tiene que coincidir; al portar una fase se
-añaden sus casos.
+añaden sus casos. El asistente (fase 6) no se compara: es distinto a propósito
+(ver abajo).
 
 ### Diferencias deliberadas con `ci-provision`
 
-Ninguna. La referencia es `ci-provision` 3.0.3. Los tres fallos que salieron al
-portarlo se corrigieron allí: el resumen de `--gluster-cluster --base IMAGEN`
-(3.0.2), y Ctrl+C en lo que lanza el asistente y la lista del asistente con
-datos de la primera vez (3.0.3). En la herramienta, un caso con una diferencia
-deliberada llevaría la opción `conocida` con el motivo: se muestra con «≈» y no
-cuenta como fallo.
+La referencia es `ci-provision` 3.0.4. Los fallos que salieron al portarlo se
+corrigieron allí (el resumen de `--gluster-cluster --base`, en la 3.0.2; Ctrl+C
+y la lista del asistente, en la 3.0.3; la imagen por defecto de «máquina básica»
+y la lista que se salía del cuadro, en la 3.0.4). En la herramienta de
+equivalencia, un caso con una diferencia deliberada lleva la opción `conocida`
+con el motivo: se muestra con «≈» y no cuenta como fallo. La única diferencia es
+el asistente:
 
-Ctrl+C en lo que lanza el asistente no lo prueba la herramienta (necesitaría
-una terminal): lo fija un test unitario (`TestLanzar`). Mientras trabaja el
-proceso hijo, el padre atiende SIGINT con un manejador que no hace nada; no lo
-ignora, porque el hijo heredaría la señal ignorada y ya no podría atraparla.
+- **El asistente (`--menu`) usa `prompt_toolkit`, no `whiptail`** (decidido por
+  David el 10-nov): botones «Atrás» y «Siguiente» (Atrás vuelve al paso anterior
+  con lo que ya se había escrito; desde el primero, al menú), ratón y `Esc`
+  para volver. Hace los mismos casos y lanza las mismas órdenes; los textos de
+  sus pantallas no son los mismos. Ctrl+C en una pantalla sale del asistente;
+  en lo que lanza, lo interrumpe y lo deshace (mientras trabaja el proceso hijo,
+  el padre atiende SIGINT con un manejador que no hace nada; no lo ignora,
+  porque el hijo heredaría la señal ignorada y ya no podría atraparla).
 
 ### Pruebas de equivalencia con `ci-diagnosis`
 
