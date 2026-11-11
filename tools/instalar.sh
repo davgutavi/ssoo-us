@@ -10,13 +10,17 @@
 # con otro nombre y después se renombra (mv): quien esté usando ssoo-us en ese
 # momento sigue con la versión anterior, y nadie ve nunca un archivo a medias.
 #
-# DESTINO=RUTA instala en RUTA/bin y RUTA/sbin en lugar de /usr/local (lo usan
-# los tests).
+# Cada instalación lleva su versión: si ya hay instalado un ssoo-us distinto con
+# la misma versión, no se instala (hay que subir VERSION en src/base.py y
+# regenerarlo con tools/build.py); si es el mismo, no hay nada que hacer.
+#
+# DESTINO=RUTA instala en RUTA/bin y RUTA/sbin en lugar de /usr/local, y
+# SSOO_US=RUTA instala otro ssoo-us (los dos, para los tests).
 
 set -euo pipefail
 export LC_ALL=C
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SSOO_US="$AQUI/../ssoo-us"
+SSOO_US="${SSOO_US:-$AQUI/../ssoo-us}"
 ADMIN="$AQUI/ssoo-us-admin"
 DESTINO="${DESTINO:-/usr/local}"
 PY=/usr/bin/python3
@@ -68,7 +72,16 @@ if ! "$PY" -c "import prompt_toolkit" 2>/dev/null; then
 fi
 
 antes="$(version "$DESTINO/bin/ssoo-us")"
-instalar_archivo "$SSOO_US" "$DESTINO/bin/ssoo-us"
+nueva="$("$PY" "$SSOO_US" --version)"
+if [[ -f "$DESTINO/bin/ssoo-us" ]] && cmp -s "$SSOO_US" "$DESTINO/bin/ssoo-us"; then
+    echo "ssoo-us: ya está instalada esta misma versión ($antes)."
+elif [[ "$antes" == "$nueva" ]]; then
+    echo "Ya hay instalado un ssoo-us distinto con la misma versión ($nueva)." >&2
+    echo "Sube VERSION en src/base.py y regenéralo (python3 tools/build.py) antes de instalarlo." >&2
+    exit 1
+else
+    instalar_archivo "$SSOO_US" "$DESTINO/bin/ssoo-us"
+    echo "ssoo-us: $antes → $(version "$DESTINO/bin/ssoo-us")"
+fi
 instalar_archivo "$ADMIN" "$DESTINO/sbin/ssoo-us-admin"
-echo "ssoo-us: $antes → $(version "$DESTINO/bin/ssoo-us")"
 ls -l "$DESTINO/bin/ssoo-us" "$DESTINO/sbin/ssoo-us-admin"

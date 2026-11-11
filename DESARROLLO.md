@@ -375,6 +375,12 @@ sudo bash DIR/tools/instalar.sh            # instala o actualiza
 sudo bash DIR/tools/instalar.sh --quitar   # lo quita
 ```
 
+**Cada instalación lleva su versión** (`VERSION`, en `src/base.py`): antes de
+instalar algo nuevo en los servidores, se sube y se regenera el programa. El
+instalador no instala un `ssoo-us` distinto con la misma versión que el que ya
+está (y si es el mismo, dice que no hay nada que hacer). Mientras esté en
+desarrollo, `0.N.0-dev`; `1.0.0` al estrenarlo.
+
 Instala `/usr/local/bin/ssoo-us` y `/usr/local/sbin/ssoo-us-admin`. Comprueba
 antes que el `python3` del sistema puede con él (y avisa si le falta PyYAML o
 `libvirt`, que necesita `diagnosis`), y dice qué versión había y cuál queda.
