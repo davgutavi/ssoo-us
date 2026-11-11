@@ -141,8 +141,9 @@ Hay más opciones para casos particulares en [opciones avanzadas](#opciones-avan
 Si ejecutas `ssoo-us provision` **sin argumentos** desde una terminal del
 servidor (o con `--menu`), se abre un asistente con menús: eliges qué quieres
 hacer (una máquina, SERVER1 del boletín 2, la infraestructura GlusterFS, solo la
-imagen base, ver o eliminar lo que tienes), rellenas el nombre, la IP (te enseña
-las libres de tu red) y las opciones, y antes de ejecutar te muestra **el comando
+imagen base, ver o eliminar lo que tienes), rellenas el nombre, la red (DHCP, o
+una IP fija: te propone la primera libre de tu red y te avisa enseguida si la que
+escribes no vale) y las opciones, y antes de ejecutar te muestra **el comando
 equivalente**, que es el que aprenderás a escribir. Todo lo que hace el
 asistente se puede hacer con las opciones de la tabla anterior.
 

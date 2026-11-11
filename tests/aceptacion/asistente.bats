@@ -71,9 +71,10 @@ pantalla() {   # pantalla TEXTO: alguna pantalla lo ha mostrado
 }
 
 @test "ssoo-us asistente: almacenamiento extra pide el nombre, sugiere la IP .2 y marca los discos; eliminar elige de la lista" {
-    guion extra server1 192.168.7.2 "" extra-disks si eliminar server1 si salir
+    guion extra server1 "" 192.168.7.2 "" extra-disks si eliminar server1 si salir
     run bash "$SCRIPT" --menu --si </dev/null
     assert_success
+    pantalla "elegir_uno: Red de la máquina: | dhcp=DHCP (la red le da una IP) ; *fija=IP fija"
     pantalla "| inicial=192.168.7.2"
     pantalla "elegir_uno: Sistema de la máquina: | *noble="
     pantalla "| *extra-disks=Seis discos extra vdb..vdg de 40G ; ssh-pass="
@@ -82,6 +83,30 @@ pantalla() {   # pantalla TEXTO: alguna pantalla lo ha mostrado
     pantalla "elegir_varios: Marca las máquinas a eliminar (con sus discos y sus ficheros cloud-init): | server1=server1  (en ejecución)"
     ! dominio_existe "${USUARIO}-server1"
     [ ! -e "$SILO/server1-vdb.qcow2" ]
+}
+
+@test "ssoo-us asistente: DHCP o IP fija; con IP fija, la primera libre y los avisos en el mismo paso" {
+    # La máquina básica, con DHCP por defecto: sin paso de IP
+    guion basica server1 "" "" "" si salir
+    run bash "$SCRIPT" --menu --dry-run </dev/null
+    assert_success
+    pantalla "elegir_uno: Red de la máquina: | *dhcp=DHCP (la red le da una IP) ; fija=IP fija"
+    ! pantalla "texto: IP fija"
+    assert_output --partial "→ $ORDEN --dry-run server1"$'\n'
+
+    # IP fija: propone la primera libre (.2); una del DHCP y otra que ya responde
+    # se avisan en el mismo paso, que conserva lo escrito
+    echo 192.168.7.5 > "$MOCK_STATE/ping_responde"
+    guion basica server1 fija 192.168.7.200 "" 192.168.7.5 "" 192.168.7.6 "" "" si salir
+    run bash "$SCRIPT" --menu </dev/null
+    assert_success
+    pantalla "texto: IP fija de la máquina, dentro de tu red virtual. / IPs libres de tu red: /   192.168.7.2 - 192.168.7.127 | inicial=192.168.7.2"
+    pantalla "aviso: La IP '192.168.7.200' está dentro del rango DHCP"
+    pantalla "También puedes volver atrás y elegir DHCP."
+    pantalla "| inicial=192.168.7.200"
+    pantalla "aviso: Algo responde ya en la IP '192.168.7.5'"
+    assert_output --partial "→ $ORDEN server1 192.168.7.6"
+    dominio_existe "${USUARIO}-server1"
 }
 
 @test "ssoo-us asistente: la lista muestra máquinas y discos sueltos, con ficha al elegir" {

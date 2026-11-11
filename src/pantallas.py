@@ -3,7 +3,8 @@
 # Cada pantalla es un diálogo a pantalla completa de prompt_toolkit (paquete
 # python3-prompt-toolkit de Ubuntu; no lo necesita nada más de ssoo-us), con
 # botones «Atrás» y «Siguiente» y uso del ratón. Devuelven lo elegido, ATRAS (el
-# botón, o Esc) o SALIR (Ctrl+C).
+# botón, o Esc) o SALIR (Ctrl+C). Al volver atrás desde un campo de texto, lo
+# que tenía escrito queda en texto_al_volver, para no perderlo.
 #
 # Para los tests hay otra implementación con las mismas operaciones,
 # PantallasGuion, que toma las respuestas de un archivo (SSOO_US_ASISTENTE_GUION)
@@ -61,8 +62,9 @@ class PantallasPT:
         self.titulo = titulo
         self.entrada = entrada      # para los tests: una entrada y una salida falsas
         self.salida = salida
+        self.texto_al_volver = None
 
-    def _mostrar(self, texto, cuerpo, botones, foco, ayuda=True):
+    def _mostrar(self, texto, cuerpo, botones, foco, ayuda=True, al_volver=None):
         """Un diálogo: el texto, el cuerpo (una lista, un campo...) y los botones
         [(etiqueta, resultado o función)]. Devuelve el resultado del que se pulse."""
         from prompt_toolkit.application import Application, get_app
@@ -91,6 +93,8 @@ class PantallasPT:
 
         @teclas.add("escape", eager=True)
         def _atras(event):
+            if al_volver:
+                al_volver()
             event.app.exit(result=ATRAS)
 
         @teclas.add("c-c")
@@ -174,11 +178,20 @@ class PantallasPT:
             get_app().exit(result=buffer.text)
             return True
 
+        def guardar():
+            self.texto_al_volver = campo.text
+
+        def atras():
+            guardar()
+            return ATRAS
+
+        self.texto_al_volver = None
         campo = TextArea(text=inicial, multiline=False, password=oculto,
                          accept_handler=aceptar, focus_on_click=True)
         campo.buffer.cursor_position = len(inicial)
-        return self._mostrar(pregunta, campo, [("Atrás", ATRAS),
-                                               ("Siguiente", lambda: campo.text)], campo)
+        return self._mostrar(pregunta, campo, [("Atrás", atras),
+                                               ("Siguiente", lambda: campo.text)], campo,
+                             al_volver=guardar)
 
     def aviso(self, texto, boton="Aceptar"):
         self._mostrar(texto, None, [(boton, None)], None, ayuda=False)
@@ -200,6 +213,7 @@ class PantallasGuion:
         if self.respuestas and self.respuestas[-1] == "":
             self.respuestas.pop()
         self.registro = registro
+        self.texto_al_volver = None
 
     def _anotar(self, tipo, texto, detalle=""):
         if self.registro:

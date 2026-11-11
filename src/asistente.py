@@ -43,21 +43,42 @@ IMAGENES_GLUSTER = (
 )
 
 
-def ips_libres_texto(o):
-    """IPs libres de la red del usuario, para mostrarlas. Si la red no se
-    encuentra, el asistente sigue (ya lo dirá el programa al ejecutar)."""
+def red_del_usuario(o):
+    """La red virtual del usuario (RedIPv4), o None si no se encuentra: el
+    asistente sigue sin ella (ya lo dirá el programa al ejecutar)."""
     try:
-        return "\n".join(cargar_red(detectar_red(o)).bloques_libres())
+        return cargar_red(detectar_red(o))
     except ErrorProvision:
-        return ""
+        return None
 
 
-def ip_de_la_red(o, n):
-    """La IP número N de la red del usuario (la .2 de SERVER1), o ""."""
-    try:
-        return entero_a_ip(cargar_red(detectar_red(o)).red_entera + n)
-    except ErrorProvision:
+def ip_sugerida(red, n=None):
+    """La IP que se propone: la .N si se puede asignar (la .2 de SERVER1), y si
+    no, la primera libre de la red. "" si no hay red o no queda ninguna."""
+    if red is None:
         return ""
+    if n is not None and red.asignable(red.red_entera + n):
+        return entero_a_ip(red.red_entera + n)
+    primera = red.primer_hueco(1)
+    return entero_a_ip(red.red_entera + primera) if primera is not None else ""
+
+
+def problema_de_la_ip(o, red, ip, maquina):
+    """Por qué no vale esta IP fija (el mismo mensaje que daría provision al
+    ejecutarse), o None si vale: dentro de la red y fuera del DHCP y de las
+    reservas, y que no la tenga otra máquina suya ni responda nada en ella."""
+    class Datos:
+        pass
+    d = Datos()
+    d.__dict__.update(vars(o))
+    d.red, d.cluster, d.obj_dominios = red, False, []
+    try:
+        validar_ip_fija(d, ip)
+        comprobar_ip_en_uso(d, ip, "%s-%s" % (o.prefijo_dominio, maquina))
+    except ErrorProvision as e:
+        return e.mensaje.replace("También puedes omitir el parámetro IP para que la máquina use "
+                                 "DHCP.", "También puedes volver atrás y elegir DHCP.")
+    return None
 
 
 def salir_asistente():
@@ -127,6 +148,8 @@ class Asistente:
     def paso_nombre(self, s, pregunta):
         def paso():
             r = self.p.texto(pregunta, s["nombre"])
+            if r == ATRAS:
+                self.conservar(s, "nombre")
             if r in (ATRAS, SALIR):
                 return r
             r = r.strip()
@@ -175,6 +198,13 @@ class Asistente:
             return SIGUIENTE
         return paso
 
+    def conservar(self, s, clave):
+        """Al volver atrás desde un campo, lo que tenía escrito se guarda: al
+        volver a ese paso, sigue ahí."""
+        escrito = getattr(self.p, "texto_al_volver", None)
+        if escrito is not None:
+            s[clave] = escrito.strip()
+
     def nombre_valido(self, nombre):
         """Nombre corto válido; si no lo es, lo dice (un nombre que empezara por
         '-' se tomaría además por una opción)."""
@@ -204,24 +234,48 @@ class Asistente:
     def maquina(self, modo):
         """basica | extra (IP .2 sugerida y discos extra marcados)."""
         o = self.o
-        s = {"nombre": "server1", "ip": ip_de_la_red(o, 2) if modo == "extra" else "",
+        s = {"nombre": "server1", "red": "fija" if modo == "extra" else "dhcp", "ip": None,
              "imagen": IMAGEN_DEFECTO, "opciones": ["extra-disks"] if modo == "extra" else [],
              "contrasena": ""}
 
+        def paso_red():
+            r = self.p.elegir_uno("Red de la máquina:",
+                                  [("dhcp", "DHCP (la red le da una IP)"),
+                                   ("fija", "IP fija")], s["red"])
+            if r in (ATRAS, SALIR):
+                return r
+            s["red"] = r
+            return SIGUIENTE
+
         def paso_ip():
-            texto = "IP fija dentro de tu red virtual. Déjala vacía para usar DHCP."
-            libres = ips_libres_texto(o)
-            if libres:
-                texto += "\nIPs libres de tu red:\n" + libres
+            """Solo con IP fija: las libres de su red y, en el campo, la primera
+            (la .2 en SERVER1); si la escrita no vale, se dice aquí mismo."""
+            if s["red"] != "fija":
+                return OMITIR
+            red = red_del_usuario(o)
+            if s["ip"] is None:
+                s["ip"] = ip_sugerida(red, 2 if modo == "extra" else None)
+            texto = "IP fija de la máquina, dentro de tu red virtual."
+            if red is not None:
+                texto += "\nIPs libres de tu red:\n" + "\n".join(red.bloques_libres())
             r = self.p.texto(texto, s["ip"])
+            if r == ATRAS:
+                self.conservar(s, "ip")
             if r in (ATRAS, SALIR):
                 return r
             s["ip"] = r.strip()
+            if not s["ip"]:
+                self.p.aviso("Escribe una IP, o vuelve atrás y elige DHCP.")
+                return REPETIR
+            problema = problema_de_la_ip(o, red, s["ip"], s["nombre"]) if red else None
+            if problema:
+                self.p.aviso(problema)
+                return REPETIR
             return SIGUIENTE
 
         def paso_lanzar():
             argumentos = self.argumentos_de(s, IMAGEN_DEFECTO) + [s["nombre"]]
-            if s["ip"]:
+            if s["red"] == "fija" and s["ip"]:
                 argumentos.append(s["ip"])
             return self.lanzar(argumentos, s["contrasena"] if "ssh-pass" in s["opciones"] else "")
 
@@ -229,6 +283,7 @@ class Asistente:
             self.paso_nombre(s, "Nombre corto de la máquina (letras, números y guiones).\n"
                                 "El dominio será %s-NOMBRE y el disco NOMBRE.qcow2."
                                 % o.prefijo_dominio),
+            paso_red,
             paso_ip,
             self.paso_imagen(s, IMAGENES_MAQUINA, "Sistema de la máquina:"),
             self.paso_opciones(s, opciones_maquina()),

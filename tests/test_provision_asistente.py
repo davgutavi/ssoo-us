@@ -70,6 +70,18 @@ class TestPantallas(unittest.TestCase):
                          "Secreta1")
         self.assertEqual(self.pantalla(TAB + INTRO, "texto", "Nombre:", "x"), ATRAS)
 
+    def test_atras_guarda_lo_escrito(self):
+        # Con el botón y con Esc: lo escrito queda en texto_al_volver
+        for teclas in ("yz" + TAB + INTRO, "yz" + ESC):
+            entrada = create_pipe_input()
+            try:
+                entrada.send_text(teclas)
+                p = su.PantallasPT("ssoo-us", entrada=entrada, salida=DummyOutput())
+                self.assertEqual(p.texto("IP:", "x"), ATRAS)
+                self.assertEqual(p.texto_al_volver, "xyz")
+            finally:
+                entrada.close()
+
     def test_confirmar_y_aviso(self):
         self.assertIs(self.pantalla(INTRO, "confirmar", "¿Adelante?"), True)
         self.assertEqual(self.pantalla(TAB + INTRO, "confirmar", "¿Adelante?"), ATRAS)
@@ -82,6 +94,7 @@ class FalsasPantallas:
     def __init__(self, respuestas):
         self.respuestas = list(respuestas)
         self.vistas = []
+        self.texto_al_volver = None
 
     def _r(self, tipo, texto, **datos):
         self.vistas.append(dict(datos, tipo=tipo, texto=texto))
@@ -97,7 +110,12 @@ class FalsasPantallas:
         return self._r("varios", texto, opciones=opciones, marcadas=marcadas)
 
     def texto(self, pregunta, inicial="", oculto=False):
-        return self._r("texto", pregunta, inicial=inicial, oculto=oculto)
+        """(ATRAS, "x"): vuelve atrás con «x» escrito en el campo."""
+        r = self._r("texto", pregunta, inicial=inicial, oculto=oculto)
+        self.texto_al_volver = None
+        if isinstance(r, tuple):
+            r, self.texto_al_volver = r
+        return r
 
     def aviso(self, texto, boton="Aceptar"):
         self._r("aviso", texto)
@@ -109,7 +127,7 @@ class FalsasPantallas:
 class Asistido(unittest.TestCase):
     """El asistente con pantallas falsas; lo que lanzaría se anota sin lanzarlo."""
 
-    def asistente(self, respuestas, *argv, red="192.168.7.", preparar=None):
+    def asistente(self, respuestas, *argv, preparar=None, en_uso=None):
         s = Silo("--menu", *argv)
         self.addCleanup(s.tmp.cleanup)
         if preparar:
@@ -122,9 +140,13 @@ class Asistido(unittest.TestCase):
                 lanzadas.append((orden[3:], kw.get("env", {})))
             return 0
 
-        with mock.patch.object(su, "ips_libres_texto", return_value=""), \
-                mock.patch.object(su, "ip_de_la_red",
-                                  side_effect=lambda o, n: red + str(n)), \
+        def comprobar_en_uso(o, ip, vm):
+            if ip in (en_uso or ()):
+                su.fallar(42, "Algo responde ya en la IP '%s'." % ip)
+
+        red = su.RedIPv4("alu0000-red", "192.168.7.1", 24, [("192.168.7.128", "192.168.7.254")])
+        with mock.patch.object(su, "red_del_usuario", return_value=red), \
+                mock.patch.object(su, "comprobar_ip_en_uso", comprobar_en_uso), \
                 mock.patch.object(su.subprocess, "call", call), \
                 mock.patch.object(su, "pausa"), \
                 contextlib.redirect_stdout(io.StringIO()) as salida:
@@ -141,33 +163,40 @@ class TestMaquina(Asistido):
 
     def test_basica_por_defecto_ubuntu(self):
         vistas, lanzadas, salida = self.asistente(
-            ["basica", "server1", "", "noble", [], True, "salir"])
-        self.assertEqual(self.de_tipo(vistas, "uno")[0]["marcada"], "noble")
+            ["basica", "server1", "dhcp", "noble", [], True, "salir"])
+        self.assertEqual([u["marcada"] for u in self.de_tipo(vistas, "uno")], ["dhcp", "noble"])
+        self.assertEqual(len(self.de_tipo(vistas, "texto")), 1)   # con DHCP, sin paso de IP
         self.assertEqual([o for o, _ in lanzadas], [["server1"]])
         self.assertIn("→ %s server1" % su.orden_provision(), salida)
         self.assertIn("Sin cambios.", salida)
 
     def test_basica_debian_con_opciones(self):
         _, lanzadas, _ = self.asistente(
-            ["basica", "server1", "", "debian12", ["extra-disks", "no-root"], True, "salir"])
+            ["basica", "server1", "dhcp", "debian12", ["extra-disks", "no-root"], True, "salir"])
         self.assertEqual(lanzadas[0][0],
                          ["--imagen", "debian12", "--extra-disks", "--no-root", "server1"])
 
     def test_server1_sugiere_la_ip_2_y_marca_los_discos(self):
         vistas, lanzadas, _ = self.asistente(
-            ["extra", "server1", "192.168.7.2", "noble", ["extra-disks"], True, "salir"], "--si")
+            ["extra", "server1", "fija", "192.168.7.2", "noble", ["extra-disks"], True, "salir"],
+            "--si")
+        self.assertEqual(self.de_tipo(vistas, "uno")[0]["marcada"], "fija")
         self.assertEqual(self.de_tipo(vistas, "texto")[1]["inicial"], "192.168.7.2")
         self.assertEqual(self.de_tipo(vistas, "varios")[0]["marcadas"], ["extra-disks"])
         self.assertEqual(lanzadas[0][0], ["--si", "--extra-disks", "server1", "192.168.7.2"])
 
     def test_atras_conserva_lo_escrito(self):
+        # nombre → red → IP (se escribe la .30 y Atrás) → red (Atrás) → nombre →
+        # red → IP, que sigue siendo la .30 → ... → confirmar (Atrás) → opciones
         vistas, lanzadas, _ = self.asistente(
-            ["basica", "web", ATRAS, "web2", "192.168.7.9", "noble", ["no-root"], ATRAS,
-             ["limpiar"], True, "salir"])
+            ["basica", "web", "fija", (ATRAS, "192.168.7.30"), ATRAS, "web2", "fija",
+             "192.168.7.30", "noble", ["no-root"], ATRAS, ["limpiar"], True, "salir"])
         textos = self.de_tipo(vistas, "texto")
-        self.assertEqual([t["inicial"] for t in textos], ["server1", "", "web", ""])
+        self.assertEqual([t["inicial"] for t in textos],
+                         ["server1", "192.168.7.2", "web", "192.168.7.30"])
+        self.assertEqual(self.de_tipo(vistas, "uno")[1]["marcada"], "fija")
         self.assertEqual(self.de_tipo(vistas, "varios")[1]["marcadas"], ["no-root"])
-        self.assertEqual(lanzadas[0][0], ["--limpiar", "web2", "192.168.7.9"])
+        self.assertEqual(lanzadas[0][0], ["--limpiar", "web2", "192.168.7.30"])
 
     def test_atras_desde_el_primer_paso_vuelve_al_menu(self):
         vistas, lanzadas, _ = self.asistente(["basica", ATRAS, "salir"])
@@ -178,7 +207,7 @@ class TestMaquina(Asistido):
 
     def test_no_confirmar_vuelve_al_ultimo_paso(self):
         vistas, lanzadas, _ = self.asistente(
-            ["basica", "s1", "", "noble", [], ATRAS, ["no-root"], True, "salir"])
+            ["basica", "s1", "dhcp", "noble", [], ATRAS, ["no-root"], True, "salir"])
         self.assertEqual(len(self.de_tipo(vistas, "confirmar")), 2)
         self.assertEqual(lanzadas[0][0], ["--no-root", "s1"])
 
@@ -191,25 +220,25 @@ class TestMaquina(Asistido):
 
     def test_contrasena_fuera_de_la_orden(self):
         vistas, lanzadas, _ = self.asistente(
-            ["basica", "web", "", "noble", ["ssh-pass"], "Secreta1", True, "salir"], "--dry-run")
+            ["basica", "web", "dhcp", "noble", ["ssh-pass"], "Secreta1", True, "salir"], "--dry-run")
         orden, entorno = lanzadas[0]
         self.assertEqual(orden, ["--dry-run", "--ssh-pass", "-", "web"])
         self.assertEqual(entorno["CI_PROVISION_SSH_PASS"], "Secreta1")
         confirmacion = self.de_tipo(vistas, "confirmar")[0]["texto"]
         self.assertIn("--dry-run --ssh-pass •••••• web", confirmacion)
         self.assertNotIn("Secreta1", confirmacion)
-        self.assertTrue(self.de_tipo(vistas, "texto")[2]["oculto"])
+        self.assertTrue(self.de_tipo(vistas, "texto")[1]["oculto"])
 
     def test_contrasena_vacia(self):
         vistas, lanzadas, _ = self.asistente(
-            ["basica", "web", "", "noble", ["ssh-pass"], "", None, ATRAS, [], True, "salir"])
+            ["basica", "web", "dhcp", "noble", ["ssh-pass"], "", None, ATRAS, [], True, "salir"])
         self.assertIn("Escribe una contraseña", self.de_tipo(vistas, "aviso")[0]["texto"])
         self.assertEqual(lanzadas[0][0], ["web"])
 
     def test_sin_contrasena_no_va_en_el_entorno(self):
         with mock.patch.dict(os.environ, {}):
             os.environ.pop("CI_PROVISION_SSH_PASS", None)
-            _, lanzadas, _ = self.asistente(["basica", "web", "", "noble", [], True, "salir"])
+            _, lanzadas, _ = self.asistente(["basica", "web", "dhcp", "noble", [], True, "salir"])
         self.assertNotIn("CI_PROVISION_SSH_PASS", lanzadas[0][1])
 
     def test_ctrl_c_sale(self):
@@ -218,9 +247,59 @@ class TestMaquina(Asistido):
         self.assertIn("Sin cambios.", salida)
 
     def test_prefijo_y_dry_run_en_lo_que_se_lanza(self):
-        _, lanzadas, _ = self.asistente(["basica", "web", "", "noble", [], True, "salir"],
+        _, lanzadas, _ = self.asistente(["basica", "web", "dhcp", "noble", [], True, "salir"],
                                         "--dry-run", "--prefijo", "demo")
         self.assertEqual(lanzadas[0][0], ["--dry-run", "--prefijo", "demo", "web"])
+
+
+class TestRed(Asistido):
+    """DHCP o IP fija; con IP fija, la primera libre y el aviso en el mismo paso."""
+
+    def test_ip_fija_propone_la_primera_libre(self):
+        vistas, lanzadas, _ = self.asistente(
+            ["basica", "s1", "fija", "192.168.7.2", "noble", [], True, "salir"])
+        ip = self.de_tipo(vistas, "texto")[1]
+        self.assertEqual(ip["inicial"], "192.168.7.2")
+        self.assertIn("IPs libres de tu red:\n  192.168.7.2 - 192.168.7.127", ip["texto"])
+        self.assertEqual(lanzadas[0][0], ["s1", "192.168.7.2"])
+
+    def test_atras_desde_la_ip_vuelve_a_la_red_sin_perderla(self):
+        vistas, lanzadas, _ = self.asistente(
+            ["basica", "s1", "fija", (ATRAS, "192.168.7.20"), "fija", "192.168.7.20", "noble",
+             [], True, "salir"])
+        unos = self.de_tipo(vistas, "uno")
+        self.assertEqual([u["marcada"] for u in unos[:2]], ["dhcp", "fija"])
+        self.assertEqual(self.de_tipo(vistas, "texto")[2]["inicial"], "192.168.7.20")
+        self.assertEqual(lanzadas[0][0], ["s1", "192.168.7.20"])
+
+    def test_ip_que_no_vale_se_avisa_en_el_paso(self):
+        vistas, lanzadas, _ = self.asistente(
+            ["basica", "s1", "fija", "192.168.7.200", None, "10.0.0.5", None, "", None,
+             "192.168.7.9", None, "192.168.7.10", "noble", [], True, "salir"],
+            en_uso=["192.168.7.9"])
+        avisos = [a["texto"] for a in self.de_tipo(vistas, "aviso")]
+        self.assertIn("rango DHCP", avisos[0])
+        self.assertIn("También puedes volver atrás y elegir DHCP.", avisos[0])
+        self.assertIn("no pertenece a la red", avisos[1])
+        self.assertIn("Escribe una IP", avisos[2])
+        self.assertIn("Algo responde ya en la IP '192.168.7.9'", avisos[3])
+        # El campo conserva lo último escrito
+        self.assertEqual([t["inicial"] for t in self.de_tipo(vistas, "texto")[1:]],
+                         ["192.168.7.2", "192.168.7.200", "10.0.0.5", "", "192.168.7.9"])
+        self.assertEqual(lanzadas[0][0], ["s1", "192.168.7.10"])
+
+    def test_dhcp_despues_de_escribir_la_ip(self):
+        _, lanzadas, _ = self.asistente(
+            ["basica", "s1", "fija", (ATRAS, "192.168.7.20"), "dhcp", "noble", [], True, "salir"])
+        self.assertEqual(lanzadas[0][0], ["s1"])
+
+    def test_server1_con_la_2_ocupada_propone_otra(self):
+        red = su.RedIPv4("r", "192.168.7.1", 24, [("192.168.7.2", "192.168.7.99")])
+        self.assertEqual(su.ip_sugerida(red, 2), "192.168.7.100")
+        self.assertEqual(su.ip_sugerida(red), "192.168.7.100")
+        red = su.RedIPv4("r", "192.168.7.1", 24, [("192.168.7.128", "192.168.7.254")])
+        self.assertEqual(su.ip_sugerida(red, 2), "192.168.7.2")
+        self.assertEqual(su.ip_sugerida(None, 2), "")
 
 
 class TestOtrosCasos(Asistido):

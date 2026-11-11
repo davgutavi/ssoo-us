@@ -178,3 +178,4 @@
 6	ssoo-us asistente: la contraseña no se muestra en el comando; sin prompt_toolkit, error 38; sin más opciones
 6	ssoo-us asistente: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes
 6	ssoo-us asistente: rechaza nombres que empiezan por '-' y la ficha respeta --prefijo
+6	ssoo-us asistente: DHCP o IP fija; con IP fija, la primera libre y los avisos en el mismo paso
