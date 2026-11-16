@@ -123,11 +123,9 @@ ssoo-us diagnosis --ayuda   # ayuda de diagnosis
 
 # 4. ⚙️ Funcionamiento de `ssoo-us provision`
 
-Ejecuta siempre desde tu silo:
-
-```bash
-cd $HOME/imagenesMV
-```
+`ssoo-us provision` trabaja siempre en tu silo, `$HOME/imagenesMV`, estés en el
+directorio que estés: allí crea los discos y los ficheros cloud-init, y allí
+busca la imagen de partida (también la de `--base`).
 
 ```bash
 ssoo-us provision [opciones] MAQUINA [IP]
@@ -600,7 +598,8 @@ silos ni redes y no muestra nunca tu clave privada.
 
 ### ▶️ Cómo se usa
 
-Desde tu silo:
+**Desde tu silo**: revisa los archivos del directorio en que estás (si no es tu
+silo, te lo dice):
 
 ```bash
 cd $HOME/imagenesMV
