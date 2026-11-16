@@ -146,7 +146,7 @@ class TestOpciones(unittest.TestCase):
     def test_opcion_desconocida(self):
         codigo, _, errores = self.ejecutar_main(["--nada"])
         self.assertEqual(codigo, 2)
-        self.assertIn("--ayuda", errores)
+        self.assertIn("ssoo-us diagnosis -h", errores)
 
     def preparar_alumno(self, home):
         """Un alumno que lo ha hecho todo bien: claves, silo, red, imagen,

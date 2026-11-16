@@ -277,6 +277,9 @@ def normalizar(texto, home):
     # «ssoo-us diagnosis» (se instala en el servidor)
     texto = texto.replace("./ci-diagnosis", "ssoo-us diagnosis")
     texto = re.sub(r"^ci-diagnosis: ", "ssoo-us diagnosis: ", texto, flags=re.M)
+    # La ayuda se pide con -h, como en provision (ci-diagnosis anunciaba --ayuda)
+    texto = texto.replace("ssoo-us diagnosis --ayuda", "ssoo-us diagnosis -h")
+    texto = texto.replace("  --ayuda     muestra esta ayuda.", "  -h          muestra esta ayuda (también --ayuda).")
     return texto
 
 

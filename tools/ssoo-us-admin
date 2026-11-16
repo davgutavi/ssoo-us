@@ -3,7 +3,7 @@
 
 Uso:
   ssoo-us-admin UVUS [serverX] [--antes | --acceso] [--ip IP] [--dir DIRECTORIO]
-  ssoo-us-admin --ayuda
+  ssoo-us-admin -h
 
 Busca en libvirt los silos y las máquinas del alumno, elige el directorio en el
 que trabaja (su silo <uvus>-imagenesMV, o ~/imagenesMV) y lanza «ssoo-us
@@ -156,7 +156,7 @@ def main(argv=None):
         accion = analizar_argumentos(argv)
     except ErrorDeUso as e:
         print("ssoo-us-admin: %s" % e, file=sys.stderr)
-        print("Consulte la ayuda con: ssoo-us-admin --ayuda", file=sys.stderr)
+        print("Consulte la ayuda con: ssoo-us-admin -h", file=sys.stderr)
         return 2
     if accion == ("ayuda",):
         print(__doc__.split("\n", 2)[2], end="")

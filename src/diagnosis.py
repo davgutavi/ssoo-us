@@ -15,7 +15,7 @@ sección 5.4) y dice qué falla. Ejecútelo desde su silo (~/imagenesMV).
               orden de virt-install y los archivos de cloud-init.
   --ip IP     la IP de la máquina, si no es la de su network-config.
   --version   muestra la versión.
-  --ayuda     muestra esta ayuda.
+  -h          muestra esta ayuda (también --ayuda).
 
 Solo lee: no cambia archivos, no arranca ni apaga máquinas y no muestra
 nunca su clave privada. Código de salida: 0 sin errores, 1 si hay algún
@@ -301,7 +301,7 @@ def diagnosis(argv=None):
         opciones = analizar_argumentos(argv)
     except ErrorDeUso as e:
         print("ssoo-us diagnosis: %s" % e, file=sys.stderr)
-        print("Consulte la ayuda con: ssoo-us diagnosis --ayuda", file=sys.stderr)
+        print("Consulte la ayuda con: ssoo-us diagnosis -h", file=sys.stderr)
         return 2
     if opciones["ayuda"]:
         print(USO_DIAGNOSIS, end="")

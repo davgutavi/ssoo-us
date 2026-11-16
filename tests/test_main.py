@@ -59,7 +59,7 @@ class TestDespachador(unittest.TestCase):
         codigo, salida, errores = lanzar("diagnosis", "--listar")
         self.assertEqual((codigo, salida), (2, ""))
         self.assertIn("ssoo-us diagnosis: opción desconocida: --listar", errores)
-        self.assertIn("Consulte la ayuda con: ssoo-us diagnosis --ayuda", errores)
+        self.assertIn("Consulte la ayuda con: ssoo-us diagnosis -h", errores)
 
     def test_diagnosis_sin_el_modulo_libvirt(self):
         # Un libvirt que no se puede importar, aquí y en un servidor que sí lo tiene

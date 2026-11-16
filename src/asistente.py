@@ -34,7 +34,7 @@ def opciones_cluster():
 
 IMAGENES_MAQUINA = (
     ("noble", "Ubuntu 24.04 (la imagen por defecto)"),
-    ("debian12", "Debian 12 (la del boletín 1)"),
+    ("debian12", "Debian 12"),
 )
 IMAGENES_GLUSTER = (
     ("noble", "Imagen cloud de Ubuntu 24.04, la misma que SERVER1 (recomendada)"),
