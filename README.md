@@ -4,9 +4,10 @@
 
 ---
 
-> ⚠️ **En desarrollo.** Este curso se siguen usando `ci-provision.sh` y
-> `ci-diagnosis`. `ssoo-us` hace lo mismo que ellas y ya está instalado en los
-> servidores, pero se estrena el curso que viene.
+> ℹ️ Este curso, las herramientas de referencia del manual y de los boletines
+> siguen siendo `ci-provision.sh` y `ci-diagnosis`. `ssoo-us` hace lo mismo que
+> ellas, con las mismas opciones, y ya está instalado en los servidores: puedes
+> usar la que prefieras.
 
 # 1. 🧠 ¿Qué es `ssoo-us`?
 

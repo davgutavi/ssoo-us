@@ -366,9 +366,11 @@ Cómo se instala (`tools/instalar.sh`) y cómo se revisa la cuenta de un alumno
 desarrollo:
 
 - **Cada instalación lleva su versión** (`VERSION`, en `src/base.py`): antes de
-  instalar algo nuevo, se sube y se regenera el programa. Mientras esté en
-  desarrollo, `0.N.0-dev`; `1.0.0` al estrenarlo. El instalador no instala un
-  `ssoo-us` distinto con la misma versión que el que ya está.
+  instalar algo nuevo, se sube y se regenera el programa. Desde la `1.0.0`
+  (16-nov-2026), `X.Y.Z`: `Z` para correcciones, `Y` para novedades y `X` si
+  cambia la forma de usarlo. Una versión con `-dev` hace que `diagnosis` diga
+  «(Versión en desarrollo.)». El instalador no instala un `ssoo-us` distinto
+  con la misma versión que el que ya está.
 - Los tests del instalador (`tests/test_instalar.py`) instalan en un directorio
   temporal (`DESTINO=RUTA`; `SSOO_US=RUTA` instala otro `ssoo-us`).
 - `ssoo-us-admin` es el `ci-diagnosis-admin` de `ci-diagnosis` 1.1.0, sin

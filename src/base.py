@@ -36,8 +36,9 @@ except ImportError:  # diagnosis: sin PyYAML se omiten las comprobaciones de est
     yaml = None
 
 # Cada instalación en los servidores lleva su versión (tools/instalar.sh no
-# instala un ssoo-us distinto con la misma): se sube con cada una.
-VERSION = "0.2.0-dev"
+# instala un ssoo-us distinto con la misma): se sube con cada una. X.Y.Z:
+# Z para correcciones, Y para novedades, X si cambia la forma de usarlo.
+VERSION = "1.0.0"
 PROGRAMA = "ssoo-us"
 
 
