@@ -359,51 +359,22 @@ registro queda en `/tmp/pruebas-ssoo-us-diagnosis-CUENTA-FECHA.log`.
 `preparar-cuenta-prueba.sh --quitar` quita el silo y la red de la cuenta (sin
 borrar archivos).
 
-## Instalación en los servidores
+## Instalación en los servidores y `ssoo-us-admin`
 
-`ssoo-us` se instala en cada servidor como una orden para todos los usuarios:
-los alumnos escriben `ssoo-us provision …` o `ssoo-us diagnosis` desde su silo,
-y todos usan la misma versión. Se ejecuta con los permisos de quien la lanza,
-como antes `ci-provision.sh` y `ci-diagnosis`. Solo necesita lo que ya tienen
-los servidores: `/usr/bin/python3` (3.8 o posterior), PyYAML y `python3-libvirt`.
+Cómo se instala (`tools/instalar.sh`) y cómo se revisa la cuenta de un alumno
+(`tools/ssoo-us-admin`): en [PROFESORADO.md](PROFESORADO.md). Para el
+desarrollo:
 
-Se copian `ssoo-us`, `tools/instalar.sh` y `tools/ssoo-us-admin` al servidor
-(en `DIR/` y `DIR/tools/`) y, con la cuenta de un profesor:
-
-```bash
-sudo bash DIR/tools/instalar.sh            # instala o actualiza
-sudo bash DIR/tools/instalar.sh --quitar   # lo quita
-```
-
-**Cada instalación lleva su versión** (`VERSION`, en `src/base.py`): antes de
-instalar algo nuevo en los servidores, se sube y se regenera el programa. El
-instalador no instala un `ssoo-us` distinto con la misma versión que el que ya
-está (y si es el mismo, dice que no hay nada que hacer). Mientras esté en
-desarrollo, `0.N.0-dev`; `1.0.0` al estrenarlo.
-
-Instala `/usr/local/bin/ssoo-us` y `/usr/local/sbin/ssoo-us-admin`. Comprueba
-antes que el `python3` del sistema puede con él (y avisa si le falta PyYAML o
-`libvirt`, que necesita `diagnosis`), y dice qué versión había y cuál queda.
-Cada archivo se copia con otro nombre y luego se renombra: quien lo esté usando
-en ese momento sigue con la versión anterior y nadie ve un archivo a medias.
-Sus tests (`tests/test_instalar.py`) instalan en un directorio temporal
-(`DESTINO=RUTA`).
-
-## Para el profesor: `ssoo-us-admin`
-
-Lanza `ssoo-us diagnosis` sobre la cuenta de un alumno, como él (con `sudo`),
-desde el directorio en que trabaja (su silo `<uvus>-imagenesMV`, o
-`~/imagenesMV`): así revisa sus archivos, sus claves y su acceso por ssh tal y
-como los vería él. Usa el `ssoo-us` instalado (el del `PATH`, o
-`/usr/local/bin/ssoo-us`; `SSOO_US=RUTA` usa otro, que el alumno tiene que
-poder leer). Es el `ci-diagnosis-admin` de `ci-diagnosis` 1.1.0, sin
-`--actualizar` (ya no se descarga de GitHub):
-
-```bash
-ssoo-us-admin alu0000 server1 --acceso
-```
-
-Sus tests son `tests/test_diagnosis_admin.py`.
+- **Cada instalación lleva su versión** (`VERSION`, en `src/base.py`): antes de
+  instalar algo nuevo, se sube y se regenera el programa. Mientras esté en
+  desarrollo, `0.N.0-dev`; `1.0.0` al estrenarlo. El instalador no instala un
+  `ssoo-us` distinto con la misma versión que el que ya está.
+- Los tests del instalador (`tests/test_instalar.py`) instalan en un directorio
+  temporal (`DESTINO=RUTA`; `SSOO_US=RUTA` instala otro `ssoo-us`).
+- `ssoo-us-admin` es el `ci-diagnosis-admin` de `ci-diagnosis` 1.1.0, sin
+  `--actualizar`: usa el `ssoo-us` del `PATH` (o `/usr/local/bin/ssoo-us`;
+  `SSOO_US=RUTA` usa otro, que el alumno tiene que poder leer). Sus tests son
+  `tests/test_diagnosis_admin.py`.
 
 ## Lo que conviene saber antes de tocar el código
 
