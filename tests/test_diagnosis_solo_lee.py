@@ -15,7 +15,8 @@ import unittest
 
 from comun import RAIZ, leer, su
 
-FUENTES = sorted(glob.glob(os.path.join(RAIZ, "src", "diagnosis*.py")))
+FUENTES = sorted(glob.glob(os.path.join(RAIZ, "src", "diagnosis*.py"))
+                 + [os.path.join(RAIZ, "src", "acceso.py")])
 
 # Llamadas que escribirían o cambiarían algo
 PROHIBIDAS_OS = {"remove", "unlink", "rename", "replace", "rmdir", "mkdir", "makedirs",
@@ -25,7 +26,7 @@ PROHIBIDAS_OS = {"remove", "unlink", "rename", "replace", "rmdir", "mkdir", "mak
 # Lo único de fuera de los fuentes de diagnosis que pueden usar: los módulos
 # importados en base.py y lo que base.py comparte a propósito
 COMPARTIDO = {"VERSION", "PROGRAMA", "leer_bytes", "IMAGEN_NOBLE", "INTERFAZ_VM",
-              "DNS_DE_LA_US", "yaml"}
+              "DNS_DE_LA_US", "PASS_CONSOLA", "yaml"}
 
 
 def modulos_de_base():
@@ -66,7 +67,7 @@ class TestSoloLee(unittest.TestCase):
 
     def test_estan_todos(self):
         self.assertEqual(sorted(self.arboles), [
-            "diagnosis.py", "diagnosis_acceso.py", "diagnosis_archivos.py",
+            "acceso.py", "diagnosis.py", "diagnosis_acceso.py", "diagnosis_archivos.py",
             "diagnosis_base.py", "diagnosis_claves.py", "diagnosis_disco.py",
             "diagnosis_servidor.py", "diagnosis_textos.py"])
 
@@ -128,6 +129,32 @@ class TestSoloLee(unittest.TestCase):
                       ["virt-install"], ["qemu-img-falso"]):
             with self.assertRaises(ValueError):
                 su.ejecutar_lectura(orden)
+
+    def test_del_agente_qemu_solo_leer(self):
+        def virsh(orden):
+            return ["virsh", "-c", "qemu:///system", "qemu-agent-command", "alu0000-server1",
+                    "--timeout", "5", su.json.dumps(orden)]
+        permitidas = [{"execute": "guest-ping"},
+                      {"execute": "guest-network-get-interfaces"},
+                      {"execute": "guest-file-open", "arguments": {"path": "/x", "mode": "r"}},
+                      {"execute": "guest-file-read", "arguments": {"handle": 1}},
+                      {"execute": "guest-file-close", "arguments": {"handle": 1}}]
+        for orden in permitidas:
+            self.assertTrue(su.orden_de_agente_permitida(virsh(orden)), orden)
+        prohibidas = [{"execute": "guest-exec", "arguments": {"path": "/bin/sh"}},
+                      {"execute": "guest-file-open", "arguments": {"path": "/x", "mode": "w"}},
+                      {"execute": "guest-file-open", "arguments": {"path": "/x"}},
+                      {"execute": "guest-file-write", "arguments": {"handle": 1}},
+                      {"execute": "guest-shutdown"}]
+        for orden in prohibidas:
+            self.assertFalse(su.orden_de_agente_permitida(virsh(orden)), orden)
+            with self.assertRaises(ValueError):
+                su.ejecutar_lectura(virsh(orden))
+        # Ni otras órdenes de virsh, ni con otra forma
+        for argv in (["virsh", "-c", "qemu:///system", "destroy", "x", "--timeout", "5", "{}"],
+                     virsh({"execute": "guest-ping"})[:-1],
+                     ["virsh", "qemu-agent-command", "x", '{"execute": "guest-ping"}']):
+            self.assertFalse(su.orden_de_agente_permitida(argv), argv)
 
     def test_ejecutar_lectura_con_lc_all_c(self):
         # ssh-keygen sin argumentos válidos: el mensaje sale en inglés

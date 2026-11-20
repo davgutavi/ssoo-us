@@ -9,8 +9,10 @@ para las máquinas virtuales de los servidores de la asignatura.
 Subcomandos:
   provision   crea máquinas virtuales con cloud-init (sustituye a
               ci-provision.sh). Su ayuda: ssoo-us provision -h
-  diagnosis   revisa la construcción de una máquina y dice qué falla
-              (sustituye a ci-diagnosis). Su ayuda: ssoo-us diagnosis -h
+  diagnosis   revisa la construcción de una máquina hecha a mano y dice qué
+              falla (sustituye a ci-diagnosis). Su ayuda: ssoo-us diagnosis -h
+  acceso      dice por qué no puede entrar por ssh en una de sus máquinas
+              y cómo arreglarlo. Su ayuda: ssoo-us acceso -h
 
 Opciones:
   --version   muestra la versión.
@@ -19,7 +21,7 @@ Opciones:
 Código de salida: el del subcomando; 2 si la orden está mal escrita.
 """
 
-SUBCOMANDOS = ("provision", "diagnosis")
+SUBCOMANDOS = ("provision", "diagnosis", "acceso")
 
 
 def ruta_del_programa():
@@ -63,6 +65,8 @@ def main(argv=None):
         return provision(resto)
     if primero == "diagnosis":
         return diagnosis(resto)
+    if primero == "acceso":
+        return acceso(resto)
     if primero.startswith("-"):
         problema = "opción desconocida: %s" % primero
     else:

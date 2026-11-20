@@ -94,10 +94,11 @@ class Dominio(_Simulado):
     """Una máquina. activo=True: encendida (estado 1); si no, apagada (5)."""
 
     def __init__(self, nombre, discos=(), activo=False, red=None, on_reboot="restart",
-                 iso=False, memoria_kib=2097152, vcpus=2, arp=None):
+                 iso=False, memoria_kib=2097152, vcpus=2, arp=None, lease=None, estado=None):
         self._nombre, self._discos, self._activo = nombre, list(discos), activo
         self._red, self._on_reboot, self._iso = red, on_reboot, iso
         self._memoria, self._vcpus, self._arp = memoria_kib, vcpus, arp
+        self._lease, self._estado = lease, estado
 
     def name(self):
         return self._nombre
@@ -118,15 +119,20 @@ class Dominio(_Simulado):
         return int(self._activo)
 
     def state(self, flags=0):
+        if self._estado is not None:
+            return [self._estado, 1]
         return [1 if self._activo else 5, 1]
 
     def interfaceAddresses(self, source, flags=0):
-        if source != 2:   # solo ARP: el agente necesita una conexión de escritura
-            raise AssertionError("interfaceAddresses con una fuente que no es ARP")
-        if self._arp is None:
-            raise libvirtError("no hay entradas ARP")
+        # 0: el DHCP de la red (lease); 2: ARP. El agente (1) necesita una conexión
+        # de escritura
+        if source not in (0, 2):
+            raise AssertionError("interfaceAddresses con una fuente que no es lease ni ARP")
+        ip = self._lease if source == 0 else self._arp
+        if ip is None:
+            raise libvirtError("no hay direcciones")
         return {"vnet0": {"hwaddr": "52:54:00:00:00:01",
-                          "addrs": [{"type": 0, "addr": self._arp, "prefix": 0}]}}
+                          "addrs": [{"type": 0, "addr": ip, "prefix": 24}]}}
 
 
 class Conexion(_Simulado):

@@ -163,6 +163,29 @@ def usar_color(flujo):
 ORDENES_PERMITIDAS = ("qemu-img", "ssh-keygen", "ssh", "ssh-add", "ping",
                       "guestfish", "virt-cat", "virt-ls")
 
+# virsh, solo para preguntar al agente QEMU de una máquina encendida (acceso.py),
+# y solo estas preguntas: abrir un archivo para leerlo, leerlo y cerrarlo, y sus
+# IPs. Nunca guest-exec ni escribir: así se lee el authorized_keys de la máquina
+# sin apagarla.
+ORDENES_AGENTE = ("guest-ping", "guest-network-get-interfaces", "guest-file-open",
+                  "guest-file-read", "guest-file-close")
+
+
+def orden_de_agente_permitida(argv):
+    """«virsh -c URI qemu-agent-command DOMINIO --timeout N JSON», con una de
+    ORDENES_AGENTE (guest-file-open, solo en modo «r»)."""
+    if len(argv) != 8 or argv[:2] != ["virsh", "-c"] or argv[3] != "qemu-agent-command" \
+            or argv[5] != "--timeout" or not argv[6].isdigit():
+        return False
+    try:
+        orden = json.loads(argv[7])
+    except ValueError:
+        return False
+    if not isinstance(orden, dict) or orden.get("execute") not in ORDENES_AGENTE:
+        return False
+    argumentos = orden.get("arguments") or {}
+    return orden["execute"] != "guest-file-open" or argumentos.get("mode") == "r"
+
 
 def ejecutar_lectura(argv, timeout=30, entrada=None):
     """Ejecuta una orden de la lista blanca, sin teclado y con LC_ALL=C.
@@ -173,8 +196,8 @@ def ejecutar_lectura(argv, timeout=30, entrada=None):
     Devuelve (código, salida, errores). El código es None si la orden no existe
     o no termina a tiempo.
     """
-    if argv[0] not in ORDENES_PERMITIDAS:
-        raise ValueError("orden no permitida: %s" % argv[0])
+    if argv[0] not in ORDENES_PERMITIDAS and not orden_de_agente_permitida(argv):
+        raise ValueError("orden no permitida: %s" % " ".join(argv[:4]))
     entorno = dict(os.environ, LC_ALL="C", LANG="C")
     extra = ({"input": entrada.encode("utf-8")} if entrada is not None
              else {"stdin": subprocess.DEVNULL})

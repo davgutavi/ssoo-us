@@ -4,10 +4,9 @@
 # salida son los mismos: los tests de aceptación (tests/aceptacion) son los de
 # ci-provision.
 
-# Contraseña de consola de 'root' (la misma que usa el manual de laboratorio).
-# 'administrador' no tiene contraseña: por SSH se entra con clave; solo con
-# --ssh-pass se le da una, y entonces la elige el alumno.
-PASS_CONSOLA = "s1st3mas"
+# PASS_CONSOLA, la contraseña de consola de 'root', está en base.py (acceso la
+# cita). 'administrador' no tiene contraseña: por SSH se entra con clave; solo
+# con --ssh-pass se le da una, y entonces la elige el alumno.
 
 # Discos
 TAM_DISCO_DEFECTO = "40G"

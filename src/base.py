@@ -49,6 +49,9 @@ PROGRAMA = "ssoo-us"
 IMAGEN_NOBLE = "noble-server-cloudimg-amd64.img"     # Ubuntu 24.04 (manual, 5.4.1)
 INTERFAZ_VM = "enp1s0"
 DNS_DE_LA_US = ("150.214.186.69", "150.214.130.15")
+# Contraseña de consola de 'root' en las máquinas de provision (la misma que usa
+# el manual de laboratorio)
+PASS_CONSOLA = "s1st3mas"
 
 
 # --- Órdenes externas -------------------------------------------------------
