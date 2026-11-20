@@ -188,6 +188,7 @@ class TestSsh(Acceso):
         self.assertIn('ssh-keygen -f "%s" -R "192.168.7.140"'
                       % os.path.join(self.home, ".ssh", "known_hosts"), texto)
         self.assertIn("Quitando esa línea de known_hosts, podrá entrar", texto)
+        self.assertNotIn("LA CLAVE DE LA MÁQUINA", texto)       # no hace falta mirarla
 
     def test_permisos_de_la_clave_privada(self):
         texto = self.textos(self.revisar([self.encendida()], ssh=(

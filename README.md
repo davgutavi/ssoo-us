@@ -7,14 +7,15 @@
 > ellas, con las mismas opciones, y ya está instalado en avantasia, warcry y
 > megadeth: puedes usar la que prefieras.
 
-`ssoo-us` tiene dos herramientas, para dos situaciones distintas:
+`ssoo-us` tiene tres herramientas, para tres situaciones distintas:
 
 | ¿Qué quieres? | Orden |
 |---|---|
 | 🛠️ **Crear** máquinas virtuales con un solo comando (SERVER1, GlusterFS…) | `ssoo-us provision` |
 | 🩺 **Revisar** una máquina que has construido **a mano** y saber qué falla | `ssoo-us diagnosis` |
+| 🔑 **Entrar**: saber por qué no puedes entrar por `ssh` en una de tus máquinas | `ssoo-us acceso` |
 
-Las dos tienen su ayuda con `-h` (`ssoo-us provision -h`, `ssoo-us diagnosis -h`).
+Todas tienen su ayuda con `-h` (por ejemplo, `ssoo-us acceso -h`).
 
 ## 📑 Índice
 
@@ -28,6 +29,7 @@ Las dos tienen su ayuda con `-h` (`ssoo-us provision -h`, `ssoo-us diagnosis -h`
 - [🩺 `ssoo-us diagnosis`: revisar una máquina hecha a mano](#diagnosis)
   - [Uso](#uso-diagnosis)
   - [Cómo leer el resultado](#resultado)
+- [🔑 `ssoo-us acceso`: por qué no puedes entrar en tu máquina](#acceso)
 - [📚 Referencia completa](#referencia)
 
 ---
@@ -219,6 +221,37 @@ ARCHIVOS DE CLOUD-INIT
 ```
 
 Si te dice «avise al profesor», el problema no es tuyo: comunícaselo tal cual.
+
+---
+
+<a id="acceso"></a>
+# 🔑 `ssoo-us acceso`: por qué no puedes entrar en tu máquina
+
+Si `ssh administrador@IP` no te deja entrar en una de tus máquinas (la hayas
+creado a mano, con `ssoo-us provision` o con `ci-provision.sh`), `acceso` te
+dice por qué y cómo arreglarlo, **sin apagarla**:
+
+```bash
+ssoo-us acceso control2
+```
+
+Con la máquina encendida, mira por orden:
+
+1. **La máquina y su red:** si está encendida, su IP, si responde y si el
+   puerto 22 está abierto.
+2. **Lo que dice `ssh`** al entrar con tu clave, y qué significa:
+   `REMOTE HOST IDENTIFICATION HAS CHANGED`, la clave privada con permisos
+   demasiado abiertos, o `Permission denied (publickey)`.
+3. **Qué clave tiene la máquina**, comparada con las tuyas. Si cambiaste tu
+   clave después de crear la máquina, te lo dice y te da la orden exacta para
+   añadirle la nueva desde su consola. Si la máquina tiene una clave tuya
+   antigua que conservas, te dice cómo entrar con ella.
+
+Se lee igual que `diagnosis` (`OK`, `AVISO`, `ERROR`, con «Cómo arreglarlo») y
+**solo lee**: no cambia nada en la máquina ni en tu cuenta. Para ver la clave
+sin apagarla usa el agente QEMU de la máquina, que tienen las creadas con
+`ssoo-us provision` y con `ci-provision.sh`; si no lo tiene, te dice cómo
+revisarla con `ssoo-us diagnosis`.
 
 ---
 

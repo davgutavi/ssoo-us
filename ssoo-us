@@ -39,7 +39,7 @@ except ImportError:  # diagnosis: sin PyYAML se omiten las comprobaciones de est
 # Cada instalación en los servidores lleva su versión (tools/instalar.sh no
 # instala un ssoo-us distinto con la misma): se sube con cada una. X.Y.Z:
 # Z para correcciones, Y para novedades, X si cambia la forma de usarlo.
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 PROGRAMA = "ssoo-us"
 
 
@@ -7695,8 +7695,9 @@ def comprobar_entrada(dominio, ip, home, esperado):
                         arreglo=["$ ssh-keygen -f \"%s\" -R \"%s\"" % (known_hosts, ip)]))
         codigo, _, err = _ssh(ip, home, "/dev/null", False)
         if codigo == 0:
+            # No hace falta mirar su clave: es lo único que falla
             rs.append(ok("Quitando esa línea de known_hosts, podrá entrar"))
-            return rs, False, False
+            return rs, True, False
     if "UNPROTECTED PRIVATE KEY FILE" in err:
         rs.append(error("ssh no usa ~/.ssh/id_rsa: tiene permisos demasiado abiertos",
                         fallo="B10", arreglo=["$ chmod 600 ~/.ssh/id_rsa"]))

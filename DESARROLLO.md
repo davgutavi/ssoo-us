@@ -54,6 +54,8 @@ src/diagnosis_acceso.py    diagnosis: --acceso (estado, conectividad, ssh) y la
                            orden de virt-install de su registro
 src/diagnosis_disco.py     diagnosis: el disco de una máquina apagada (guestfish)
 src/diagnosis.py           diagnosis: opciones y flujo
+src/acceso.py              acceso: por qué no puede entrar por ssh en su máquina
+                           (estado, IP, puerto 22, ssh y, por el agente QEMU, su clave)
 src/main.py       Despachador de subcomandos, --version y -h
 
 tools/ssoo-us-admin   Para el profesor: diagnosis sobre la cuenta de un alumno,
@@ -380,12 +382,20 @@ desarrollo:
 
 ## Lo que conviene saber antes de tocar el código
 
-- **`diagnosis` solo lee.** Sus órdenes externas, solo con
+- **`diagnosis` y `acceso` solo leen.** Sus órdenes externas, solo con
   `ejecutar_lectura()` (lista blanca: `qemu-img`, `ssh-keygen`, `ssh`,
   `ssh-add`, `ping`, `guestfish`, `virt-cat`, `virt-ls`), y libvirt con
-  `openReadOnly`. Lo comprueban los tests de `test_diagnosis_solo_lee.py`: un
-  fuente de `diagnosis` no puede llamar a nada de `provision`; lo que tengan que
-  compartir (como `IMAGEN_NOBLE`) va en `base.py`.
+  `openReadOnly`. Lo comprueban los tests de `test_diagnosis_solo_lee.py` sobre
+  `src/diagnosis*.py` y `src/acceso.py`: no pueden llamar a nada de
+  `provision`; lo que tengan que compartir (como `IMAGEN_NOBLE` o
+  `PASS_CONSOLA`) va en `base.py`.
+- **`virsh`, solo para preguntar al agente QEMU** (`acceso`, para leer el
+  `authorized_keys` de una máquina encendida): `ejecutar_lectura()` lo admite
+  únicamente con la forma `virsh -c URI qemu-agent-command DOMINIO --timeout N
+  JSON` y con las órdenes de `ORDENES_AGENTE` (abrir un archivo en modo `r`,
+  leerlo, cerrarlo, y las IPs). Nunca `guest-exec` ni escribir. La conexión de
+  solo lectura de libvirt no deja hablar con el agente; `virsh` usa la del
+  alumno (grupo `libvirt`).
 - **Cómo se nombra a sí mismo.** `provision` escribe la orden como la llamaron
   (`orden_provision()`, el `$0` de `ci-provision.sh`), salvo si se encontró en
   el `PATH`: entonces sin la ruta, `ssoo-us provision`, aunque Python reciba
