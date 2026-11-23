@@ -390,7 +390,10 @@ desarrollo:
   `provision`; lo que tengan que compartir (como `IMAGEN_NOBLE` o
   `PASS_CONSOLA`) va en `base.py`.
 - **`virsh`, solo para preguntar al agente QEMU** (`acceso`, para leer el
-  `authorized_keys` de una máquina encendida): `ejecutar_lectura()` lo admite
+  `authorized_keys` de una máquina encendida y su user-data en
+  `/var/lib/cloud/instance/user-data.txt`, para saber si `root` tiene
+  contraseña: si no la tiene, como en las hechas a mano, no se le manda a la
+  consola sino a la FAQ B.3 del manual; la contraseña no se muestra nunca): `ejecutar_lectura()` lo admite
   únicamente con la forma `virsh -c URI qemu-agent-command DOMINIO --timeout N
   JSON` y con las órdenes de `ORDENES_AGENTE` (abrir un archivo en modo `r`,
   leerlo, cerrarlo, y las IPs). Nunca `guest-exec` ni escribir. La conexión de

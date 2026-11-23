@@ -26,6 +26,8 @@ alguno, 2 si no se ha podido hacer la revisión.
 
 FUENTE_LEASE = 0   # VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE
 CLAVES_EN_LA_MAQUINA = "/home/%s/.ssh/authorized_keys" % USUARIO_VM
+# El user-data con el que se creó, tal como lo guardó cloud-init en la máquina
+USER_DATA_EN_LA_MAQUINA = "/var/lib/cloud/instance/user-data.txt"
 SIN_AGENTE = ("not responding", "not connected", "not configured", "agent is not",
               "Guest agent", "guest agent")
 
@@ -195,15 +197,62 @@ def linea_de_la_clave(clave):
     return "%s %s" % (clave.tipo, base64.b64encode(clave.blob).decode())
 
 
-def pasos_anadir_clave(dominio, clave, ip):
-    return ["Añada su clave a la máquina desde su consola:",
-            "1. Entre en la consola, pulse Intro e inicie sesión como root (si la creó con "
-            "ssoo-us provision o con ci-provision, la contraseña es %s):" % PASS_CONSOLA,
-            "$ virsh console %s" % dominio,
-            "2. Dentro de la máquina, añada su clave (es una sola línea):",
-            "$ echo '%s' >> %s" % (linea_de_la_clave(clave), CLAVES_EN_LA_MAQUINA),
-            "3. Salga con exit y luego Ctrl+], y vuelva a entrar:",
-            "$ ssh %s@%s" % (USUARIO_VM, ip or "IP")]
+def root_en_la_consola(dominio):
+    """¿Puede entrar como root en la consola? Lo dice el user-data con que se
+    creó la máquina: las de ssoo-us provision y ci-provision dan a root la
+    contraseña PASS_CONSOLA (salvo con --no-root); las hechas a mano siguiendo
+    el manual no le dan ninguna. Devuelve "conocida" (es PASS_CONSOLA),
+    "otra", "no" o None (no se sabe). La contraseña no se muestra nunca."""
+    texto, _ = leer_por_agente(dominio, USER_DATA_EN_LA_MAQUINA)
+    if texto is None or yaml is None:
+        return None
+    try:
+        datos = yaml.safe_load(texto)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(datos, dict):
+        return None
+    chpasswd = datos.get("chpasswd")
+    if not isinstance(chpasswd, dict):
+        return "no"
+    claves = []
+    for u in chpasswd.get("users") or []:
+        if isinstance(u, dict) and u.get("name") == "root" and u.get("password"):
+            claves.append(str(u["password"]))
+    lista = chpasswd.get("list") or []          # la forma antigua: «root:contraseña»
+    for linea in lista.splitlines() if isinstance(lista, str) else lista:
+        usuario, _, clave = str(linea).strip().partition(":")
+        if usuario == "root" and clave:
+            claves.append(clave)
+    if not claves:
+        return "no"
+    return "conocida" if claves[-1] == PASS_CONSOLA else "otra"
+
+
+def pasos_anadir_clave(dominio, clave, ip, root):
+    """(pasos, sección del manual) para añadir su clave a la máquina. Desde la
+    consola solo si root tiene contraseña; si no (las hechas a mano), lo que
+    dice el manual: apagarla e inyectarla con virt-customize."""
+    a_mano = ["Siga el procedimiento del manual: apague la máquina y añádale su clave "
+              "actual con virt-customize."]
+    if root == "no":
+        return a_mano, "faq-publickey"
+    contrasena = ("la contraseña es %s" % PASS_CONSOLA if root == "conocida" else
+                  "con la contraseña que le dio en user-data" if root == "otra" else
+                  "si la creó con ssoo-us provision o con ci-provision, la contraseña es %s"
+                  % PASS_CONSOLA)
+    pasos = ["Añada su clave a la máquina desde su consola:",
+             "1. Entre en la consola, pulse Intro e inicie sesión como root (%s):" % contrasena,
+             "$ virsh console %s" % dominio,
+             "2. Dentro de la máquina, añada su clave (es una sola línea):",
+             "$ echo '%s' >> %s" % (linea_de_la_clave(clave), CLAVES_EN_LA_MAQUINA),
+             "3. Salga con exit y luego Ctrl+], y vuelva a entrar:",
+             "$ ssh %s@%s" % (USUARIO_VM, ip or "IP")]
+    if root is None:
+        pasos += ["Si la hizo a mano, root no tiene contraseña: " + a_mano[0][0].lower()
+                  + a_mano[0][1:]]
+        return pasos, "faq-publickey"
+    return pasos, None
 
 
 def comprobar_clave_de_la_maquina(dominio, home, ip, rechazada):
@@ -211,13 +260,16 @@ def comprobar_clave_de_la_maquina(dominio, home, ip, rechazada):
     texto, problema = leer_por_agente(dominio, CLAVES_EN_LA_MAQUINA)
     suyas = claves_del_usuario(home)
     actual = suyas[0][1] if suyas and suyas[0][0] == "id_rsa.pub" else None
+    root = root_en_la_consola(dominio) if problema != "sin agente" else None
+    sin_clave = ("cree su pareja de claves con ssh-keygen; después tendrá que añadir la "
+                 "pública a la máquina como explica el manual.")
     if texto is None:
         if problema == "no existe":
+            pasos, seccion = (pasos_anadir_clave(dominio, actual, ip, root) if actual
+                              else (sin_clave, "faq-publickey"))
             rs = [error("En la máquina, %s no tiene authorized_keys" % USUARIO_VM,
                         efecto="no se puede entrar por ssh con ninguna clave.",
-                        arreglo=pasos_anadir_clave(dominio, actual, ip) if actual else
-                        "cree su pareja de claves (ssh-keygen) y añada la pública a la "
-                        "máquina desde su consola.")]
+                        arreglo=pasos, seccion=seccion)]
             return rs
         if problema == "sin agente":
             return [omitida("La clave de la máquina: no se puede ver sin apagarla, porque no "
@@ -231,14 +283,22 @@ def comprobar_clave_de_la_maquina(dominio, home, ip, rechazada):
     if actual is not None and actual.huella in huellas:
         rs = [ok("La máquina tiene su clave de ~/.ssh/id_rsa.pub")]
         if rechazada:
-            rs.append(aviso("La máquina tiene su clave, pero ssh la rechaza",
-                            efecto="puede que los permisos de /home/%s/.ssh en la máquina "
-                                   "no sean los que exige ssh." % USUARIO_VM,
-                            arreglo=["Desde su consola, como root:",
-                                     "$ virsh console %s" % dominio,
-                                     "$ chown -R %s: /home/%s/.ssh && chmod 700 /home/%s/.ssh "
-                                     "&& chmod 600 %s" % (USUARIO_VM, USUARIO_VM, USUARIO_VM,
-                                                          CLAVES_EN_LA_MAQUINA)]))
+            efecto = ("puede que los permisos de /home/%s/.ssh en la máquina no sean los "
+                      "que exige ssh." % USUARIO_VM)
+            if root in ("conocida", "otra"):
+                rs.append(aviso("La máquina tiene su clave, pero ssh la rechaza", efecto=efecto,
+                                arreglo=["Desde su consola, como root:",
+                                         "$ virsh console %s" % dominio,
+                                         "$ chown -R %s: /home/%s/.ssh && chmod 700 "
+                                         "/home/%s/.ssh && chmod 600 %s"
+                                         % (USUARIO_VM, USUARIO_VM, USUARIO_VM,
+                                            CLAVES_EN_LA_MAQUINA)]))
+            else:
+                rs.append(aviso("La máquina tiene su clave, pero ssh la rechaza", efecto=efecto,
+                                arreglo="vuelva a añadirle su clave con el procedimiento del "
+                                        "manual (apagarla y usar virt-customize), que deja "
+                                        "bien los permisos.",
+                                seccion="faq-publickey"))
         return rs
     otras = [(n, c) for n, c in suyas if c.huella in huellas and n != "id_rsa.pub"]
     detalle = ["En la máquina: %s" % c.describir() for c in en_la_maquina] or \
@@ -252,22 +312,24 @@ def comprobar_clave_de_la_maquina(dominio, home, ip, rechazada):
         if os.path.exists(privada):
             pasos = ["Entre con esa clave:",
                      "$ ssh -i ~/.ssh/%s %s@%s" % (nombre[:-len(".pub")], USUARIO_VM, ip or "IP")]
+        seccion = None
         if actual is not None:
-            pasos += ["O, para entrar con la actual, " + pasos_anadir_clave(dominio, actual, ip)[0]
-                      .lower()] + pasos_anadir_clave(dominio, actual, ip)[1:]
+            anadir, seccion = pasos_anadir_clave(dominio, actual, ip, root)
+            pasos += ["O, para entrar con la actual: " + anadir[0][0].lower() + anadir[0][1:]] \
+                + anadir[1:]
         return [error("La máquina tiene otra clave suya (~/.ssh/%s), no la de ~/.ssh/id_rsa.pub"
                       % nombre, fallo="B5", detalle=detalle,
                       efecto="ssh entra con ~/.ssh/id_rsa: la máquina se creó con otra clave y "
                              "después cambió la de id_rsa.",
-                      arreglo=pasos or None)]
+                      arreglo=pasos or None, seccion=seccion)]
     if actual is None:
         return [error("No tiene la clave ~/.ssh/id_rsa.pub", fallo="B5", detalle=detalle,
-                      arreglo="cree su pareja de claves con ssh-keygen; después tendrá que "
-                              "añadir la pública a la máquina desde su consola.")]
+                      arreglo=sin_clave, seccion="faq-publickey")]
+    pasos, seccion = pasos_anadir_clave(dominio, actual, ip, root)
     return [error("La máquina no tiene ninguna de sus claves", fallo="B5", detalle=detalle,
                   efecto="ssh contesta «Permission denied (publickey)». Lo más probable: "
                          "cambió su clave (ssh-keygen) después de crear la máquina.",
-                  arreglo=pasos_anadir_clave(dominio, actual, ip))]
+                  arreglo=pasos, seccion=seccion)]
 
 
 # --- La revisión ------------------------------------------------------------------
@@ -288,7 +350,8 @@ def comprobar_puerto(dominio, ip):
                         arreglo=["Espere un minuto y repita.",
                                  "Si sigue igual, mire en su consola qué pasa (si pide «Give "
                                  "root password for maintenance», está en modo de emergencia):",
-                                 "$ virsh console %s" % dominio]))
+                                 "$ virsh console %s" % dominio],
+                        seccion="faq-refused"))
     else:
         rs.append(error("Nada responde en el puerto 22 de %s" % ip,
                         detalle=["ssh dice «Connection timed out» o «No route to host»."],
@@ -327,7 +390,8 @@ def comprobar_entrada(dominio, ip, home, esperado):
         rs.append(error("known_hosts tiene otra clave para %s" % ip, fallo="D4",
                         efecto="ssh se niega a conectar («REMOTE HOST IDENTIFICATION HAS "
                                "CHANGED»). Pasa al volver a crear una máquina con la misma IP.",
-                        arreglo=["$ ssh-keygen -f \"%s\" -R \"%s\"" % (known_hosts, ip)]))
+                        arreglo=["$ ssh-keygen -f \"%s\" -R \"%s\"" % (known_hosts, ip)],
+                        seccion="faq-warning"))
         codigo, _, err = _ssh(ip, home, "/dev/null", False)
         if codigo == 0:
             # No hace falta mirar su clave: es lo único que falla
@@ -346,7 +410,8 @@ def comprobar_entrada(dominio, ip, home, esperado):
         rs.append(error("La máquina rechaza su clave: «Permission denied (publickey)»",
                         fallo="B5", efecto="su clave no es la que tiene la máquina.",
                         arreglo="en el bloque siguiente, «La clave de la máquina», se ve qué "
-                                "clave tiene y cómo añadirle la suya."))
+                                "clave tiene y cómo añadirle la suya.",
+                        seccion="faq-publickey"))
         return rs, False, True
     lineas = [l for l in err.strip().splitlines() if l.strip()]
     rs.append(error("ssh no ha podido entrar",
@@ -402,7 +467,8 @@ def revisar_acceso(conn, uvus, home, nombre, ip_forzada=None):
             efecto="o todavía arranca, o no ha conseguido red.",
             arreglo=["Espere un minuto y repita. Si sigue sin IP, mire en su consola si ha "
                      "arrancado bien:", "$ virsh console %s" % m.nombre,
-                     "Si sabe su IP, indíquela: ssoo-us acceso %s --ip IP" % corto])])
+                     "Si sabe su IP, indíquela: ssoo-us acceso %s --ip IP" % corto],
+            seccion="faq-ip")])
     else:
         rs, abierto = comprobar_puerto(m.nombre, ip)
         informe.bloque("Red", [ok("IP %s (%s)" % (ip, origen))] + rs)

@@ -11,11 +11,31 @@ import unittest
 from unittest import mock
 
 import falso_libvirt as fl
-from comun_diagnosis import Claves, cd, escribir
+from comun_diagnosis import Claves, cd, escribir, necesita_yaml
 
 UVUS = "alu0000"
 DOMINIO = UVUS + "-control2"
 RECHAZO = (255, "", "administrador@192.168.7.140: Permission denied (publickey).\n")
+
+# El user-data de cada forma de crear la máquina (el de la máquina, leído por el agente)
+USER_DATA_PROVISION = """#cloud-config
+users:
+  - name: administrador
+    ssh_authorized_keys: [ssh-rsa AAAA]
+chpasswd:
+  expire: false
+  users:
+    - name: root
+      password: s1st3mas
+      type: text
+"""
+USER_DATA_A_MANO = """#cloud-config
+users:
+  - name: administrador
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ssh-rsa AAAA
+"""
 
 
 class Agente:
@@ -149,12 +169,14 @@ class TestRed(Acceso):
         with mock.patch.object(cd, "ip_por_agente", return_value=None):
             texto = self.textos(self.revisar([self.encendida(lease=None)], agente=agente))
         self.assertIn("No se encuentra la IP de la máquina", texto)
+        self.assertIn("Manual: FAQ B.4", texto)
         self.assertIn("La máquina no tiene ninguna de sus claves", texto)
 
     def test_puerto_rechazado(self):
         texto = self.textos(self.revisar([self.encendida()], puerto="rechazado"))
         self.assertIn("La máquina rechaza la conexión al puerto 22", texto)
         self.assertIn("modo de emergencia", texto)
+        self.assertIn("Manual: FAQ B.9 (Connection refused)", texto)
         self.assertEqual(self.ssh, [])                   # no se prueba ssh
 
     def test_puerto_sin_respuesta(self):
@@ -188,6 +210,7 @@ class TestSsh(Acceso):
         self.assertIn('ssh-keygen -f "%s" -R "192.168.7.140"'
                       % os.path.join(self.home, ".ssh", "known_hosts"), texto)
         self.assertIn("Quitando esa línea de known_hosts, podrá entrar", texto)
+        self.assertIn("Manual: FAQ B.2", texto)
         self.assertNotIn("LA CLAVE DE LA MÁQUINA", texto)       # no hace falta mirarla
 
     def test_permisos_de_la_clave_privada(self):
@@ -218,10 +241,58 @@ class TestClave(Acceso):
         self.assertIn("              echo '%s' >> /home/administrador/.ssh/authorized_keys"
                       % cd.linea_de_la_clave(actual), cd.formatear_informe(informe))
         self.assertIn("virsh console %s" % DOMINIO, texto)
-        self.assertIn("s1st3mas", texto)
+        # Sin su user-data no se sabe cómo la creó: las dos formas, con el manual
+        self.assertIn("si la creó con ssoo-us provision o con ci-provision, la contraseña es "
+                      "s1st3mas", texto)
+        self.assertIn("Si la hizo a mano, root no tiene contraseña", texto)
+        self.assertIn("Manual: FAQ B.3", texto)
         self.assertEqual(self.agente.ordenes,
                          ["guest-file-open"] + ["guest-file-read"] * (
-                             len(Claves.publica("portatil")) // 10 + 1) + ["guest-file-close"])
+                             len(Claves.publica("portatil")) // 10 + 1) + ["guest-file-close"]
+                         + ["guest-file-open"])          # el user-data, que no está
+
+    def agente_con(self, user_data, claves=None):
+        return Agente({cd.CLAVES_EN_LA_MAQUINA: claves or Claves.publica("portatil"),
+                       cd.USER_DATA_EN_LA_MAQUINA: user_data})
+
+    @necesita_yaml
+    def test_clave_cambiada_creada_con_provision(self):
+        texto = self.textos(self.revisar([self.encendida()],
+                                         agente=self.agente_con(USER_DATA_PROVISION)))
+        self.assertIn("inicie sesión como root (la contraseña es s1st3mas)", texto)
+        self.assertIn("virsh console %s" % DOMINIO, texto)
+        self.assertNotIn("a mano", texto)
+        self.assertNotIn("Manual: FAQ B.3", texto.split("LA CLAVE DE LA MÁQUINA")[1])
+
+    @necesita_yaml
+    def test_clave_cambiada_creada_a_mano(self):
+        # root sin contraseña: no puede usar la consola; lo que dice el manual
+        for user_data in (USER_DATA_A_MANO,
+                          USER_DATA_PROVISION.replace("name: root", "name: administrador")):
+            texto = self.textos(self.revisar([self.encendida()],
+                                             agente=self.agente_con(user_data)))
+            bloque = texto.split("LA CLAVE DE LA MÁQUINA")[1]
+            self.assertIn("La máquina no tiene ninguna de sus claves [B5]", bloque)
+            self.assertIn("apague la máquina y añádale su clave actual con virt-customize",
+                          bloque)
+            self.assertIn("Manual: FAQ B.3 (Permission denied (publickey))", bloque)
+            self.assertNotIn("virsh console", bloque)
+            self.assertNotIn("s1st3mas", bloque)
+
+    @necesita_yaml
+    def test_root_en_la_consola(self):
+        casos = ((USER_DATA_PROVISION, "conocida"),
+                 (USER_DATA_PROVISION.replace("s1st3mas", "otra"), "otra"),
+                 (USER_DATA_A_MANO, "no"),
+                 ("#cloud-config\nchpasswd:\n  list: |\n    root:s1st3mas\n", "conocida"),
+                 ("#cloud-config\nchpasswd:\n  list: [administrador:x]\n", "no"),
+                 ("no: es: yaml: [", None), ("solo texto", None))
+        for user_data, esperado in casos:
+            agente = Agente({cd.USER_DATA_EN_LA_MAQUINA: user_data})
+            with mock.patch.object(cd, "preguntar_al_agente", agente):
+                self.assertEqual(cd.root_en_la_consola(DOMINIO), esperado, user_data)
+        with mock.patch.object(cd, "preguntar_al_agente", Agente({})):
+            self.assertIsNone(cd.root_en_la_consola(DOMINIO))
 
     def test_tiene_la_clave_de_otro_archivo_suyo(self):
         escribir(os.path.join(self.home, ".ssh", "id_rsa_antigua.pub"), Claves.publica("portatil"))
@@ -239,7 +310,17 @@ class TestClave(Acceso):
         texto = self.textos(self.revisar([self.encendida()], agente=agente))
         self.assertIn("La máquina tiene su clave de ~/.ssh/id_rsa.pub", texto)
         self.assertIn("La máquina tiene su clave, pero ssh la rechaza", texto)
+        self.assertIn("virt-customize", texto)            # no se sabe si root entra
+        self.assertIn("Manual: FAQ B.3", texto)
+
+    @necesita_yaml
+    def test_tiene_su_clave_pero_ssh_la_rechaza_con_root(self):
+        agente = Agente({cd.CLAVES_EN_LA_MAQUINA: Claves.publica("sin_frase"),
+                         cd.USER_DATA_EN_LA_MAQUINA: USER_DATA_PROVISION})
+        texto = self.textos(self.revisar([self.encendida()], agente=agente))
+        self.assertIn("La máquina tiene su clave, pero ssh la rechaza", texto)
         self.assertIn("chmod 700 /home/administrador/.ssh", texto)
+        self.assertNotIn("virt-customize", texto)
 
     def test_sin_authorized_keys(self):
         texto = self.textos(self.revisar([self.encendida()], agente=Agente({})))

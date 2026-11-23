@@ -243,11 +243,14 @@ Con la máquina encendida, mira por orden:
    `REMOTE HOST IDENTIFICATION HAS CHANGED`, la clave privada con permisos
    demasiado abiertos, o `Permission denied (publickey)`.
 3. **Qué clave tiene la máquina**, comparada con las tuyas. Si cambiaste tu
-   clave después de crear la máquina, te lo dice y te da la orden exacta para
-   añadirle la nueva desde su consola. Si la máquina tiene una clave tuya
-   antigua que conservas, te dice cómo entrar con ella.
+   clave después de crear la máquina, te lo dice y te explica cómo añadirle la
+   nueva: si la creaste con `provision` o con `ci-provision.sh`, con la orden
+   exacta para hacerlo desde su consola (como `root`); si la hiciste a mano,
+   con el procedimiento del manual (FAQ B.3). Si la máquina tiene una clave
+   tuya antigua que conservas, te dice cómo entrar con ella.
 
-Se lee igual que `diagnosis` (`OK`, `AVISO`, `ERROR`, con «Cómo arreglarlo») y
+Se lee igual que `diagnosis` (`OK`, `AVISO`, `ERROR`, con «Cómo arreglarlo» y
+la sección del manual) y
 **solo lee**: no cambia nada en la máquina ni en tu cuenta. Para ver la clave
 sin apagarla usa el agente QEMU de la máquina, que tienen las creadas con
 `ssoo-us provision` y con `ci-provision.sh`; si no lo tiene, te dice cómo

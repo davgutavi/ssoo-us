@@ -1,7 +1,7 @@
 # --- Secciones del manual ----------------------------------------------------
 #
 # Todas las referencias al manual están aquí: si el manual cambia la numeración,
-# se cambia solo esta tabla. Numeración del manual v4.2.0.
+# se cambia solo esta tabla. Numeración del manual v4.3.2.
 
 SECCIONES = {
     "silo": "sección 5.2 (Silo)",
@@ -11,7 +11,9 @@ SECCIONES = {
     "acceso": "sección 5.4.3 (Primer acceso)",
     "faq-warning": "FAQ B.2 (remote host identification has changed)",
     "faq-publickey": "FAQ B.3 (Permission denied (publickey))",
+    "faq-ip": "FAQ B.4 (la IP de su máquina virtual)",
     "faq-guestfs": "FAQ B.5 (libguestfs error)",
+    "faq-refused": "FAQ B.9 (Connection refused)",
 }
 
 # Lo que espera el manual (la imagen, la interfaz y los DNS están en base.py:
