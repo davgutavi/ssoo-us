@@ -127,9 +127,13 @@ class FalsasPantallas:
 class Asistido(unittest.TestCase):
     """El asistente con pantallas falsas; lo que lanzaría se anota sin lanzarlo."""
 
-    def asistente(self, respuestas, *argv, preparar=None, en_uso=None):
+    def asistente(self, respuestas, *argv, preparar=None, en_uso=None, clave=True):
         s = Silo("--menu", *argv)
         self.addCleanup(s.tmp.cleanup)
+        if clave:
+            os.makedirs(os.path.dirname(s.o.pubkey_path), exist_ok=True)
+            with open(s.o.pubkey_path, "w") as f:
+                f.write(s.o.pubkey + "\n")
         if preparar:
             preparar(s)
         p = FalsasPantallas(respuestas)
@@ -350,6 +354,30 @@ class TestOtrosCasos(Asistido):
     def test_eliminar_todo(self):
         _, lanzadas, _ = self.asistente(["todo", True, "salir"])
         self.assertEqual(lanzadas[0][0], ["--eliminar-todo"])
+
+    def test_sin_clave_avisa_antes_de_las_pantallas_de_crear(self):
+        # Cada entrada que crea algo avisa y vuelve al menú, sin preguntar nada más
+        vistas, lanzadas, _ = self.asistente(
+            ["basica", None, "extra", None, "cluster", None, "base", None, "todo", True,
+             "salir"], clave=False)
+        avisos = self.de_tipo(vistas, "aviso")
+        self.assertEqual(len(avisos), 4)
+        for a in avisos:
+            self.assertIn("No existe la clave pública en %s" % self.s.o.pubkey_path, a["texto"])
+            self.assertIn("ssh-keygen", a["texto"])
+            self.assertIn("vuelve a elegir esta opción", a["texto"])
+        self.assertEqual([v["tipo"] for v in vistas],
+                         ["menu", "aviso"] * 4 + ["menu", "confirmar", "menu"])
+        # Eliminar no la necesita
+        self.assertEqual([o for o, _ in lanzadas], [["--eliminar-todo"]])
+
+    def test_clave_que_no_vale(self):
+        def privada(s):
+            with open(s.o.pubkey_path, "w") as f:
+                f.write("-----BEGIN OPENSSH PRIVATE KEY-----\n")
+        vistas, lanzadas, _ = self.asistente(["basica", None, "salir"], preparar=privada)
+        self.assertIn("no contiene una clave pública", self.de_tipo(vistas, "aviso")[0]["texto"])
+        self.assertEqual(lanzadas, [])
 
     def test_salir_desde_el_menu(self):
         for respuesta in (ATRAS, SALIR, "salir"):

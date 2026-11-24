@@ -24,7 +24,7 @@ class TestArnes(unittest.TestCase):
         self.assertEqual(len(set(self.nombres)), 156, "hay nombres de test repetidos")
 
     def test_los_del_asistente(self):
-        self.assertEqual(len(self.del_asistente), 12)
+        self.assertEqual(len(self.del_asistente), 13)
         self.assertTrue(all(n.startswith("ssoo-us asistente: ") for n in self.del_asistente))
 
     def test_cada_test_en_una_fase(self):

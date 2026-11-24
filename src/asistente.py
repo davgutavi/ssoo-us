@@ -130,6 +130,8 @@ class Asistente:
             if sel in (ATRAS, SALIR, "salir"):
                 salir_asistente()
             ultima = sel
+            if sel in ("basica", "extra", "cluster", "base") and not self.clave_lista():
+                continue
             if sel in ("basica", "extra"):
                 self.maquina(sel)
             elif sel == "cluster":
@@ -142,6 +144,17 @@ class Asistente:
                 self.eliminar()
             elif sel == "todo":
                 recorrer([lambda: self.lanzar(["--eliminar-todo"])])
+
+    def clave_lista(self):
+        """Antes de las pantallas de crear algo: sin una clave pública válida,
+        provision fallaría con el error 31 al final, con todo ya rellenado. Ver
+        y eliminar máquinas no la necesitan."""
+        try:
+            comprobar_clave_publica(self.o)
+        except ErrorProvision as e:
+            self.p.aviso(e.mensaje + "\n\nCuando la tengas, vuelve a elegir esta opción.")
+            return False
+        return True
 
     # --- Pasos comunes ---
 

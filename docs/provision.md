@@ -128,7 +128,9 @@ base, ver o eliminar lo que tienes), rellenas el nombre, la red (DHCP, o una IP
 fija: te propone la primera libre de tu red y te avisa enseguida si la que
 escribes no vale) y las opciones, y antes de ejecutar te muestra **el comando
 equivalente**, que es el que aprenderás a escribir. Todo lo que hace el
-asistente se puede hacer con las opciones de la tabla anterior.
+asistente se puede hacer con las opciones de la tabla anterior. Para crear algo
+necesitas tu clave pública (`~/.ssh/id_rsa.pub`): si no la tienes, te lo dice
+antes de empezar a preguntar.
 
 Se maneja con el teclado o con el **ratón**:
 

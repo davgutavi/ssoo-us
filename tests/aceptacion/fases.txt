@@ -179,3 +179,4 @@
 6	ssoo-us asistente: --menu --dry-run no crea nada; la contraseña no va en la línea de órdenes
 6	ssoo-us asistente: rechaza nombres que empiezan por '-' y la ficha respeta --prefijo
 6	ssoo-us asistente: DHCP o IP fija; con IP fija, la primera libre y los avisos en el mismo paso
+6	ssoo-us asistente: sin clave pública lo dice antes de las pantallas de crear

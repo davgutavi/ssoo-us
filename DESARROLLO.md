@@ -211,7 +211,8 @@ menos los seis que dependen de las sustituciones de `$ORDEN` y de `--version`.
 
 ### Tests de aceptación del asistente (`asistente.bats`)
 
-Los mismos casos que los 11 del asistente de `ci-provision.bats`, con el mismo
+Los mismos casos que los 11 del asistente de `ci-provision.bats` (más los
+suyos, como el de la clave pública), con el mismo
 entorno y los mismos mocks, pero sin `whiptail`: el asistente toma las
 respuestas de un guion y anota cada pantalla en un registro.
 
@@ -277,6 +278,11 @@ el asistente:
   en lo que lanza, lo interrumpe y lo deshace (mientras trabaja el proceso hijo,
   el padre atiende SIGINT con un manejador que no hace nada; no lo ignora,
   porque el hijo heredaría la señal ignorada y ya no podría atraparla).
+  Antes de las pantallas de crear algo comprueba la clave pública (la misma
+  comprobación del error 31): si falta o no vale, lo avisa y vuelve al menú, en
+  vez de dejar que el alumno lo rellene todo y que la orden falle al final (en
+  `ci-provision`, `--menu` se salta esa comprobación). Ver y eliminar no la
+  necesitan.
 
 ### Pruebas de equivalencia con `ci-diagnosis`
 

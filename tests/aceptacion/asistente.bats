@@ -60,6 +60,17 @@ pantalla() {   # pantalla TEXTO: alguna pantalla lo ha mostrado
     assert_output --partial "→ $ORDEN --gluster-cluster --base gluster-base.qcow2 --limpiar"
 }
 
+@test "ssoo-us asistente: sin clave pública lo dice antes de las pantallas de crear" {
+    rm -f "$HOME/.ssh/id_rsa.pub"
+    guion basica "" cluster "" salir
+    run bash "$SCRIPT" --menu </dev/null
+    assert_success
+    [ "$(grep -c "^aviso: No existe la clave pública en $HOME/.ssh/id_rsa.pub" "$SSOO_US_ASISTENTE_REGISTRO")" -eq 2 ]
+    ! pantalla "Nombre corto de la máquina"
+    ! pantalla "imagen base GlusterFS"
+    [ "$(llamadas '^virt-install')" -eq 0 ]
+}
+
 @test "ssoo-us asistente: salir del menú principal no hace nada" {
     for salida in "<atrás>" "<salir>" salir; do
         guion "$salida"
