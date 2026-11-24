@@ -2,10 +2,11 @@
 ### Máquinas virtuales con cloud-init en los servidores de la asignatura
 **Asignatura: Sistemas Operativos — Universidad de Sevilla**
 
-> ℹ️ Este curso, las herramientas de referencia del manual y de los boletines
-> siguen siendo `ci-provision.sh` y `ci-diagnosis`. `ssoo-us` hace lo mismo que
-> ellas, con las mismas opciones, y ya está instalado en avantasia, warcry y
-> megadeth: puedes usar la que prefieras.
+> ℹ️ `ssoo-us` sustituye a `ci-provision.sh` y `ci-diagnosis` y pasa a ser la
+> herramienta del manual de laboratorio. Hace lo mismo que ellas, con las mismas
+> opciones, y ya está instalado en avantasia, warcry y megadeth: no hay que
+> descargar nada. Si usabas `ci-provision.sh`, cambia `./ci-provision.sh` por
+> `ssoo-us provision`.
 
 `ssoo-us` tiene tres herramientas, para tres situaciones distintas:
 
