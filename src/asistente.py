@@ -147,10 +147,20 @@ class Asistente:
 
     def clave_lista(self):
         """Antes de las pantallas de crear algo: sin una clave pública válida,
-        provision fallaría con el error 31 al final, con todo ya rellenado. Ver
-        y eliminar máquinas no la necesitan."""
+        provision fallaría con el error 31 al final, con todo ya rellenado. Si no
+        tiene ninguna, se le ofrece crearla. Ver y eliminar máquinas no la
+        necesitan."""
+        o = self.o
         try:
-            comprobar_clave_publica(self.o)
+            if not o.dry_run and se_puede_crear_la_clave(o):
+                r = self.p.confirmar(PREGUNTA_CREAR_CLAVE % (o.home + "/.ssh/id_rsa"),
+                                     si="Crearla", no="Atrás")
+                if r == SALIR:
+                    salir_asistente()
+                if r is not True:
+                    return False
+                self.p.aviso("\n".join(crear_clave(o)))
+            comprobar_clave_publica(o)
         except ErrorProvision as e:
             self.p.aviso(e.mensaje + "\n\nCuando la tengas, vuelve a elegir esta opción.")
             return False

@@ -284,6 +284,29 @@ el asistente:
   `ci-provision`, `--menu` se salta esa comprobación). Ver y eliminar no la
   necesitan.
 
+Y dos añadidos de la 1.2.0 (David, 24-nov), que no cambian nada de lo que
+comprueban los tests heredados:
+
+- **Crear la clave SSH.** Hay alumnos (de otros grupos) que usan la herramienta
+  sin haber visto qué es una clave. Si no tienen ninguna (ni `~/.ssh/id_rsa` ni
+  `~/.ssh/id_rsa.pub`, con la ruta por defecto), se les ofrece crearla con
+  `ssh-keygen -t rsa -N ""` (sin contraseña: quien no sabe de claves no sabría
+  qué hacer cuando `ssh` se la pidiera): una pregunta `[s/N]` desde una
+  terminal, sin preguntar con `--si`, y una pantalla en el asistente. Sin
+  terminal o con `--dry-run`, el error 31 de siempre (`claves.py`). Si existe la
+  privada sin la pública, nunca se genera otra (perdería el acceso a sus
+  máquinas): el error 31 le da `ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub`.
+- **La ficha** (`--no-ficha` para no crearla). El resumen final se guarda en el
+  silo, en `MAQUINA-ficha.txt` (con `--prefijo`, `PREFIJO-MAQUINA-ficha.txt`; en
+  el clúster, una por nodo con el resumen entero), con modo 600 porque lleva
+  contraseñas, y con la fecha y la orden (sin la contraseña de `--ssh-pass`). La
+  primera línea lleva la marca `(la escribe ssoo-us provision)`: solo se
+  sobrescribe o se borra un fichero con esa marca, nunca uno del alumno que se
+  llame igual ni un enlace. `--eliminar` la borra con la máquina (aunque ya no
+  exista la máquina); `--eliminar-todo`, las de sus dominios; con `--no-ficha`
+  se quita la que hubiera quedado de una máquina anterior con ese nombre. La
+  base GlusterFS suelta (`--glusterfs`) no tiene ficha: no es una máquina.
+
 ### Pruebas de equivalencia con `ci-diagnosis`
 
 `tools/equivalencia_diagnosis.py` carga `ci-diagnosis` (el archivo generado de

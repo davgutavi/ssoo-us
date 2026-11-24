@@ -4,6 +4,7 @@ entrada simulada, y el flujo de cada caso con unas pantallas falsas."""
 import contextlib
 import io
 import os
+import shutil
 import signal
 import unittest
 from unittest import mock
@@ -355,21 +356,45 @@ class TestOtrosCasos(Asistido):
         _, lanzadas, _ = self.asistente(["todo", True, "salir"])
         self.assertEqual(lanzadas[0][0], ["--eliminar-todo"])
 
-    def test_sin_clave_avisa_antes_de_las_pantallas_de_crear(self):
-        # Cada entrada que crea algo avisa y vuelve al menú, sin preguntar nada más
+    def test_sin_clave_ofrece_crearla_antes_de_las_pantallas_de_crear(self):
+        # Atrás en la pregunta: vuelve al menú sin preguntar nada más, en cada
+        # entrada que crea algo; eliminar no la necesita
         vistas, lanzadas, _ = self.asistente(
-            ["basica", None, "extra", None, "cluster", None, "base", None, "todo", True,
+            ["basica", ATRAS, "extra", ATRAS, "cluster", ATRAS, "base", ATRAS, "todo", True,
              "salir"], clave=False)
-        avisos = self.de_tipo(vistas, "aviso")
-        self.assertEqual(len(avisos), 4)
-        for a in avisos:
-            self.assertIn("No existe la clave pública en %s" % self.s.o.pubkey_path, a["texto"])
-            self.assertIn("ssh-keygen", a["texto"])
-            self.assertIn("vuelve a elegir esta opción", a["texto"])
+        preguntas = self.de_tipo(vistas, "confirmar")[:4]
+        for p in preguntas:
+            self.assertIn("No tienes clave SSH (%s/.ssh/id_rsa)" % self.s.o.home, p["texto"])
         self.assertEqual([v["tipo"] for v in vistas],
-                         ["menu", "aviso"] * 4 + ["menu", "confirmar", "menu"])
-        # Eliminar no la necesita
+                         ["menu", "confirmar"] * 4 + ["menu", "confirmar", "menu"])
         self.assertEqual([o for o, _ in lanzadas], [["--eliminar-todo"]])
+        self.assertFalse(os.path.exists(self.s.o.home + "/.ssh/id_rsa"))
+
+    @unittest.skipIf(shutil.which("ssh-keygen") is None, "sin ssh-keygen")
+    def test_sin_clave_la_crea_y_sigue(self):
+        vistas, lanzadas, _ = self.asistente(
+            ["basica", True, None, "server1", "dhcp", "noble", [], True, "salir"], clave=False)
+        self.assertIn("✔ Clave SSH creada", self.de_tipo(vistas, "aviso")[0]["texto"])
+        self.assertTrue(os.path.isfile(self.s.o.home + "/.ssh/id_rsa.pub"))
+        self.assertEqual([o for o, _ in lanzadas], [["server1"]])
+
+    def test_sin_clave_con_dry_run_solo_avisa(self):
+        vistas, lanzadas, _ = self.asistente(["basica", None, "salir"], "--dry-run", clave=False)
+        aviso = self.de_tipo(vistas, "aviso")[0]["texto"]
+        self.assertIn("No existe la clave pública en %s" % self.s.o.pubkey_path, aviso)
+        self.assertIn("vuelve a elegir esta opción", aviso)
+        self.assertEqual(lanzadas, [])
+
+    @unittest.skipIf(shutil.which("ssh-keygen") is None, "sin ssh-keygen")
+    def test_con_la_privada_sin_la_publica_no_la_ofrece(self):
+        def solo_privada(s):
+            os.remove(s.o.pubkey_path)
+            with open(s.o.home + "/.ssh/id_rsa", "w") as f:
+                f.write("privada\n")
+        vistas, lanzadas, _ = self.asistente(["basica", None, "salir"], preparar=solo_privada)
+        self.assertEqual(self.de_tipo(vistas, "confirmar"), [])
+        self.assertIn("ssh-keygen -y -f", self.de_tipo(vistas, "aviso")[0]["texto"])
+        self.assertEqual(lanzadas, [])
 
     def test_clave_que_no_vale(self):
         def privada(s):

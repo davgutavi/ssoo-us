@@ -41,6 +41,14 @@ pantalla() {   # pantalla TEXTO: alguna pantalla lo ha mostrado
     [ -e "$SILO/server1-vdg.qcow2" ]
     [ "$(qinfo "$SILO/server1.qcow2" '."backing-filename"')" = "noble-server-cloudimg-amd64.img" ]
     [ "$(grep -c '^menu: ¿Qué quieres hacer?' "$SSOO_US_ASISTENTE_REGISTRO")" -eq 2 ]
+    # El resumen queda en la ficha, que solo puede leer su dueño
+    local ficha="$SILO/server1-ficha.txt"
+    assert_output --partial "Estos datos quedan guardados en $ficha"
+    [ "$(head -1 "$ficha")" = "Ficha de la máquina ${USUARIO}-server1 (la escribe ssoo-us provision)" ]
+    grep -qF "  $ORDEN --extra-disks --no-root server1" "$ficha"
+    grep -q "^Máquina      : ${USUARIO}-server1" "$ficha"
+    grep -q "^Acceso:" "$ficha"
+    [ "$(stat -f %Lp "$ficha" 2>/dev/null || stat -c %a "$ficha")" = "600" ]
 }
 
 @test "ssoo-us asistente: el clúster deja elegir la imagen de la base y los discos de crea-entorno.sh" {
@@ -51,6 +59,12 @@ pantalla() {   # pantalla TEXTO: alguna pantalla lo ha mostrado
     assert_output --partial "→ $ORDEN --gluster-cluster --imagen debian12 --discos-nodo 7"
     [ "$(qinfo "$SILO/gluster-base.qcow2" '."backing-filename"')" = "debian12.qcow2" ]
     [ -e "$SILO/server4-vdh.qcow2" ]
+    # Una ficha por nodo, cada una con el resumen de la infraestructura
+    assert_output --partial "Estos datos quedan guardados en una ficha por nodo"
+    for n in server1 server2 server3 server4; do
+        [ "$(head -1 "$SILO/$n-ficha.txt")" = "Ficha del nodo ${USUARIO}-$n de la infraestructura GlusterFS (la escribe ssoo-us provision)" ]
+        grep -q "^Infraestructura GlusterFS creada" "$SILO/$n-ficha.txt"
+    done
 
     # Con la base ya hecha, ofrece reutilizarla y no pregunta la imagen
     guion cluster "" limpiar si salir
@@ -60,15 +74,35 @@ pantalla() {   # pantalla TEXTO: alguna pantalla lo ha mostrado
     assert_output --partial "→ $ORDEN --gluster-cluster --base gluster-base.qcow2 --limpiar"
 }
 
-@test "ssoo-us asistente: sin clave pública lo dice antes de las pantallas de crear" {
+@test "ssoo-us asistente: sin clave SSH ofrece crearla antes de las pantallas de crear" {
     rm -f "$HOME/.ssh/id_rsa.pub"
-    guion basica "" cluster "" salir
+    # Si no la quiere, vuelve al menú sin preguntar nada más
+    guion basica "<atrás>" cluster "<atrás>" salir
     run bash "$SCRIPT" --menu </dev/null
     assert_success
-    [ "$(grep -c "^aviso: No existe la clave pública en $HOME/.ssh/id_rsa.pub" "$SSOO_US_ASISTENTE_REGISTRO")" -eq 2 ]
+    [ "$(grep -c "^confirmar: No tienes clave SSH ($HOME/.ssh/id_rsa)" "$SSOO_US_ASISTENTE_REGISTRO")" -eq 2 ]
     ! pantalla "Nombre corto de la máquina"
-    ! pantalla "imagen base GlusterFS"
+    [ ! -e "$HOME/.ssh/id_rsa" ]
     [ "$(llamadas '^virt-install')" -eq 0 ]
+
+    # Si la quiere, la crea (sin contraseña) y sigue con las pantallas
+    : > "$SSOO_US_ASISTENTE_REGISTRO"
+    guion basica si "" server1 "" "" "" si salir
+    run bash "$SCRIPT" --menu </dev/null
+    assert_success
+    pantalla "aviso: ✔ Clave SSH creada: $HOME/.ssh/id_rsa (privada)"
+    assert_output --partial "→ $ORDEN server1"
+    ssh-keygen -y -P "" -f "$HOME/.ssh/id_rsa" >/dev/null
+    grep -qF "$(cut -d' ' -f2 "$HOME/.ssh/id_rsa.pub")" "$SILO/cloudinit-${USUARIO}-server1/cip-user.yaml"
+
+    # Con la privada y sin la pública, no la ofrece: dice cómo recuperarla
+    rm "$HOME/.ssh/id_rsa.pub"
+    : > "$SSOO_US_ASISTENTE_REGISTRO"
+    guion basica "" salir
+    run bash "$SCRIPT" --menu </dev/null
+    assert_success
+    ! pantalla "confirmar: No tienes clave SSH"
+    pantalla "ssh-keygen -y -f $HOME/.ssh/id_rsa > $HOME/.ssh/id_rsa.pub"
 }
 
 @test "ssoo-us asistente: salir del menú principal no hace nada" {
@@ -94,6 +128,9 @@ pantalla() {   # pantalla TEXTO: alguna pantalla lo ha mostrado
     pantalla "elegir_varios: Marca las máquinas a eliminar (con sus discos y sus ficheros cloud-init): | server1=server1  (en ejecución)"
     ! dominio_existe "${USUARIO}-server1"
     [ ! -e "$SILO/server1-vdb.qcow2" ]
+    # Y su ficha, con ella
+    assert_output --partial "✔ ficha $SILO/server1-ficha.txt eliminada"
+    [ ! -e "$SILO/server1-ficha.txt" ]
 }
 
 @test "ssoo-us asistente: DHCP o IP fija; con IP fija, la primera libre y los avisos en el mismo paso" {

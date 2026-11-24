@@ -10,9 +10,11 @@ Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 """
 
 import base64
+import contextlib
 import glob
 import grp
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -39,7 +41,7 @@ except ImportError:  # diagnosis: sin PyYAML se omiten las comprobaciones de est
 # Cada instalación en los servidores lleva su versión (tools/instalar.sh no
 # instala un ssoo-us distinto con la misma): se sube con cada una. X.Y.Z:
 # Z para correcciones, Y para novedades, X si cambia la forma de usarlo.
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 PROGRAMA = "ssoo-us"
 
 
@@ -276,6 +278,14 @@ def comprobar_clave_publica(o):
     Deja en o.pubkey la línea, sin los espacios del final."""
     ruta = o.pubkey_path
     if not os.path.isfile(ruta):
+        privada = ruta[:-len(".pub")] if ruta.endswith(".pub") else ""
+        if privada and os.path.isfile(privada):
+            # ssh-keygen le preguntaría si sobrescribe la privada y, si dijera
+            # que sí, perdería el acceso a las máquinas hechas con ella
+            fallar(31, "No existe la clave pública %s, pero sí la privada %s.\n"
+                       "No generes otra: perderías el acceso a las máquinas que ya tengas. "
+                       "Recupera la\npública a partir de la privada con:\n"
+                       "  ssh-keygen -y -f %s > %s" % (ruta, privada, privada, ruta))
         fallar(31, "No existe la clave pública en %s. Genera una con: ssh-keygen" % ruta)
     datos = leer_bytes(ruta) or b""
     lineas = lineas_con_texto(datos.decode("utf-8", "surrogateescape"))
@@ -292,6 +302,54 @@ def comprobar_clave_publica(o):
                    "por ssh-rsa, ssh-ed25519 o ecdsa-sha2-… (¿has copiado ahí la clave privada u "
                    "otro fichero?).\n"
                    "Si no la tienes, genera una pareja de claves nueva con: ssh-keygen" % ruta)
+
+
+# --- Crear la clave si no tiene ninguna ---------------------------------------------
+#
+# Hay alumnos que usan la herramienta sin haber visto qué es una clave SSH: si no
+# tienen ninguna (ni la pública ni la privada) en ~/.ssh/id_rsa, se les ofrece
+# crearla. Sin contraseña: quien no sabe de claves no sabría qué hacer cuando
+# ssh se la pidiera. Si existe la privada, nunca: se perdería el acceso a sus
+# máquinas (comprobar_clave_publica le dice cómo recuperar la pública).
+
+PREGUNTA_CREAR_CLAVE = ("No tienes clave SSH (%s). Es la que te permite entrar en tus "
+                        "máquinas sin contraseña.\n¿La creo ahora?")
+
+
+def se_puede_crear_la_clave(o):
+    """La de siempre (~/.ssh/id_rsa), sin pública ni privada, y con ssh-keygen."""
+    ruta = o.home + "/.ssh/id_rsa"
+    return (o.pubkey_path == ruta + ".pub" and not os.path.lexists(ruta + ".pub")
+            and not os.path.lexists(ruta) and shutil.which("ssh-keygen") is not None)
+
+
+def crear_clave(o):
+    """ssh-keygen -t rsa sin contraseña en ~/.ssh/id_rsa. Devuelve las líneas
+    que se le enseñan al alumno."""
+    directorio = o.home + "/.ssh"
+    os.makedirs(directorio, mode=0o700, exist_ok=True)
+    ruta = directorio + "/id_rsa"
+    codigo, _, errores = ejecutar(["ssh-keygen", "-q", "-t", "rsa", "-N", "", "-f", ruta],
+                                  timeout=60)
+    if codigo != 0 or not os.path.isfile(ruta + ".pub"):
+        fallar(31, "No se ha podido crear la clave con ssh-keygen%s.\nCréala tú con: ssh-keygen"
+               % (": " + errores.strip() if errores.strip() else ""))
+    return ["✔ Clave SSH creada: %s (privada) y %s.pub (pública)." % (ruta, ruta),
+            "  Es la que usará ssh para entrar en tus máquinas. No la borres ni se la des a nadie."]
+
+
+def ofrecer_crear_clave(o):
+    """Si no tiene ninguna clave, la crea tras preguntar (con --si, sin
+    preguntar). Sin terminal, o con --dry-run, no hace nada: lo dirá
+    comprobar_clave_publica con el error 31."""
+    if o.dry_run or not se_puede_crear_la_clave(o):
+        return
+    if not o.si and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    if confirmar(o, PREGUNTA_CREAR_CLAVE % (o.home + "/.ssh/id_rsa")):
+        for linea in crear_clave(o):
+            print(linea)
+        print()
 
 
 # --- Imágenes de partida (--imagen) ------------------------------------------
@@ -1660,6 +1718,9 @@ def mostrar_plan_maquina(o):
     else:
         print("Al terminar cloud-init, se expulsaría su medio y la máquina se apagaría y se")
         print("volvería a arrancar, para que se ejecute con su configuración definitiva.")
+        if not o.no_ficha:
+            print("El resumen final se guardaría en %s (sin ella: --no-ficha)."
+                  % ruta_ficha(o, o.maquina))
     print()
     print("No se ha creado ni modificado ninguna máquina, disco ni red.")
 
@@ -1728,7 +1789,7 @@ def ejecutar_maquina(o):
     else:
         aviso_on_reboot([o.vm_name])
 
-    print_summary(o)
+    con_ficha(o, [(ruta_ficha(o, o.maquina), "de la máquina %s" % o.vm_name)], print_summary)
     avisar_known_hosts(o, [o.ip or o.ips_detectadas.get(o.vm_name, "")])
 
 
@@ -1825,6 +1886,87 @@ def avisar_known_hosts(o, ips):
                 print("       Al conectar por SSH verás un aviso de seguridad. Para resolverlo:")
                 avisado = True
             print('         ssh-keygen -f "%s" -R "%s"' % (kh, ip))
+
+
+# --- Ficha de la máquina ---------------------------------------------------------
+#
+# El resumen final se guarda también en el silo, en MAQUINA-ficha.txt: los
+# alumnos preguntan a menudo por esos datos (IP, contraseñas, cómo entrar). Lleva
+# las contraseñas, así que solo la puede leer su dueño. --eliminar la borra con
+# la máquina; solo se toca un fichero que lleve la marca de la primera línea
+# (nunca uno del alumno que se llame igual).
+
+MARCA_FICHA = "(la escribe ssoo-us provision)"
+
+
+def ruta_ficha(o, maquina):
+    return "%s/%s%s-ficha.txt" % (o.silo, o.prefijo_fichero, maquina)
+
+
+def primera_linea_ficha(ruta):
+    """La primera línea si RUTA es una ficha nuestra (un fichero, no un enlace,
+    con la marca); si no, None."""
+    if os.path.islink(ruta) or not os.path.isfile(ruta):
+        return None
+    datos = leer_bytes(ruta)
+    if datos is None:
+        return None
+    primera = datos.split(b"\n", 1)[0].decode("utf-8", "replace")
+    return primera if primera.startswith("Ficha ") and primera.endswith(MARCA_FICHA) else None
+
+
+def es_ficha_nuestra(ruta):
+    return primera_linea_ficha(ruta) is not None
+
+
+def orden_ejecutada(o):
+    """La orden con la que se creó, sin la contraseña de --ssh-pass."""
+    partes, anterior = [orden_provision()], ""
+    for a in o.argv:
+        partes.append("••••••" if anterior == "--ssh-pass" and a != "-" else a)
+        anterior = a
+    return " ".join(partes)
+
+
+def guardar_fichas(o, fichas, resumen):
+    """fichas: [(ruta, «de la máquina X» o «del nodo X»)]. Con --no-ficha no se guarda ninguna, y se
+    quita la que hubiera quedado de otra máquina con el mismo nombre."""
+    if o.no_ficha:
+        for ruta, _ in fichas:
+            if es_ficha_nuestra(ruta):
+                borrar_si_existe(ruta)
+        return
+    cabecera = ("Creada el %s con:\n  %s\n"
+                "Si su IP es por DHCP, puede cambiar; la de ahora te la da: %s %s--listar\n\n"
+                % (time.strftime("%d-%m-%Y a las %H:%M"), orden_ejecutada(o), orden_provision(),
+                   prefijo_en_orden(o)))
+    guardadas = []
+    for ruta, de_que in fichas:
+        if os.path.lexists(ruta) and not es_ficha_nuestra(ruta):
+            print("AVISO: no se guarda la ficha: ya existe %s y no es de esta herramienta." % ruta)
+            continue
+        try:
+            escribir_privado(ruta, "Ficha %s %s\n%s%s" % (de_que, MARCA_FICHA, cabecera, resumen))
+        except OSError as e:
+            print("AVISO: no se ha podido guardar la ficha %s: %s" % (ruta, e.strerror))
+            continue
+        guardadas.append(ruta)
+    if len(guardadas) == 1:
+        print("Estos datos quedan guardados en %s" % guardadas[0])
+        print("Para verlos otra vez:  cat %s" % guardadas[0])
+    elif guardadas:
+        print("Estos datos quedan guardados en una ficha por nodo, en %s:" % o.silo)
+        print("  %s" % "  ".join(os.path.basename(r) for r in guardadas))
+        print("Para verlos otra vez:  cat %s" % guardadas[0])
+
+
+def con_ficha(o, fichas, resumen):
+    """Escribe el resumen (la función RESUMEN) y lo guarda en las fichas."""
+    texto = io.StringIO()
+    with contextlib.redirect_stdout(texto):
+        resumen(o)
+    sys.stdout.write(texto.getvalue())
+    guardar_fichas(o, fichas, texto.getvalue())
 
 
 def print_summary_base(o):
@@ -2121,7 +2263,9 @@ def ejecutar_cluster(o):
         if sin_terminar:
             aviso_on_reboot(sin_terminar)
 
-    print_summary_cluster(o)
+    con_ficha(o, [(ruta_ficha(o, host), "del nodo %s-%s de la infraestructura GlusterFS"
+                   % (o.prefijo_dominio, host)) for host in CLUSTER_NODOS],
+              print_summary_cluster)
     avisar_known_hosts(o, o.cluster_ips)
 
 
@@ -2265,11 +2409,12 @@ class PlanEliminacion:
         self.dominios = []
         self.ficheros = []
         self.dirs = []
+        self.fichas = []
         self.conservados = []
         self.sin_nada = []
 
     def hay_algo(self):
-        return bool(self.dominios or self.ficheros or self.dirs)
+        return bool(self.dominios or self.ficheros or self.dirs or self.fichas)
 
 
 def planificar_eliminacion(o, nombres):
@@ -2302,6 +2447,9 @@ def planificar_eliminacion(o, nombres):
             if os.path.isdir(d):
                 plan.dirs.append(d)
                 habia = True
+        if es_ficha_nuestra(ruta_ficha(o, m)):
+            plan.fichas.append(ruta_ficha(o, m))
+            habia = True
         if not habia:
             plan.sin_nada.append(m)
 
@@ -2325,6 +2473,8 @@ def mostrar_plan_eliminacion(o, plan):
             print("  disco    %s" % f)
         for x in plan.dirs:
             print("  ficheros %s/" % x)
+        for x in plan.fichas:
+            print("  ficha    %s" % x)
     if plan.conservados:
         print("Se conserva:")
         for x in plan.conservados:
@@ -2347,6 +2497,9 @@ def ejecutar_eliminacion(plan):
     for x in plan.dirs:
         borrar_ruta(x)
         print("  ✔ ficheros %s eliminados" % x)
+    for x in plan.fichas:
+        borrar_si_existe(x)
+        print("  ✔ ficha %s eliminada" % x)
 
 
 def cancelar_eliminacion():
@@ -2385,6 +2538,11 @@ def eliminar_todo(o):
     for d in sorted(glob.glob(patron)):
         if os.path.isdir(d) and d not in plan.dirs:
             plan.dirs.append(d)
+    # Y sus fichas (las de las máquinas con su prefijo de dominio)
+    for f in ficheros_del_silo(o, glob.escape(o.prefijo_fichero) + "*-ficha.txt"):
+        primera = primera_linea_ficha(f)
+        if primera and " %s-" % o.prefijo_dominio in primera and f not in plan.fichas:
+            plan.fichas.append(f)
 
     # Discos del silo que quedarían sin máquina, salvo las imágenes cloud. Se
     # comprueba contra todos los dominios del servidor y contra todas las copias
@@ -2849,10 +3007,20 @@ class Asistente:
 
     def clave_lista(self):
         """Antes de las pantallas de crear algo: sin una clave pública válida,
-        provision fallaría con el error 31 al final, con todo ya rellenado. Ver
-        y eliminar máquinas no la necesitan."""
+        provision fallaría con el error 31 al final, con todo ya rellenado. Si no
+        tiene ninguna, se le ofrece crearla. Ver y eliminar máquinas no la
+        necesitan."""
+        o = self.o
         try:
-            comprobar_clave_publica(self.o)
+            if not o.dry_run and se_puede_crear_la_clave(o):
+                r = self.p.confirmar(PREGUNTA_CREAR_CLAVE % (o.home + "/.ssh/id_rsa"),
+                                     si="Crearla", no="Atrás")
+                if r == SALIR:
+                    salir_asistente()
+                if r is not True:
+                    return False
+                self.p.aviso("\n".join(crear_clave(o)))
+            comprobar_clave_publica(o)
         except ErrorProvision as e:
             self.p.aviso(e.mensaje + "\n\nCuando la tengas, vuelve a elegir esta opción.")
             return False
@@ -3354,6 +3522,8 @@ class Opciones:
         # Opciones
         self.extra_disks = self.glusterfs = self.cluster = self.limpiar = False
         self.dry_run = self.no_wait = self.no_root = self.no_graficos = self.si = False
+        self.no_ficha = False
+        self.argv = []                # la orden tal como se escribió (para la ficha)
         self.listar = self.eliminar = self.eliminar_todo = self.menu = False
         self.red_opt = self.disco_opt = self.base_opt = self.imagen_opt = ""
         self.discos_nodo_opt = self.ip_inicial_opt = self.ram_opt = self.vcpus_opt = ""
@@ -3466,6 +3636,9 @@ Opciones:
                        las máquinas que se crean a mano)
   --no-virt-viewer     No habilita la consola gráfica (virt-viewer). La consola de
                        texto (virsh console) sigue funcionando.
+  --no-ficha           No guarda la ficha de la máquina. Sin esta opción, el resumen
+                       final se guarda también en el silo, en MAQUINA-ficha.txt (en el
+                       clúster, una por nodo), y --eliminar la borra con la máquina.
   --limpiar            Si ya existen los dominios o discos que el script va a
                        crear, los elimina antes (solo esos; nada más), previa
                        confirmación
@@ -3495,8 +3668,8 @@ Ver y eliminar lo que ya tienes:
   --listar             Muestra tus máquinas (estado, IP, discos) y los discos del silo
                        que no usa ninguna. No lleva MAQUINA.
   --eliminar MAQUINA...
-                       Elimina esas máquinas con sus discos y sus ficheros cloud-init,
-                       previa confirmación. Nunca borra un disco que use otra máquina
+                       Elimina esas máquinas con sus discos, sus ficheros cloud-init y
+                       su ficha, previa confirmación. Nunca borra un disco que use otra máquina
                        ni una imagen de la que dependan otras copias.
   --eliminar-todo      Elimina todas tus máquinas (las {usuario}-*) con sus discos y
                        ofrece borrar los discos del silo que queden sin máquina.
@@ -3506,8 +3679,8 @@ Ver y eliminar lo que ya tienes:
                        sin argumentos desde una terminal.
 
 En todas las máquinas:
-  - Usuario 'administrador' con tu clave pública ({pubkey}) y
-    sudo sin contraseña. Sin contraseña propia salvo que uses --ssh-pass.
+  - Usuario 'administrador' con tu clave pública ({pubkey}; si no
+    tienes ninguna, te ofrece crearla) y sudo sin contraseña. Sin contraseña propia salvo que uses --ssh-pass.
     En las que salen de ubuntu-base (la base GlusterFS y sus nodos) se queda
     como en esa imagen: con la contraseña del boletín 1, que sudo pide; el
     script solo le añade tu clave pública.
@@ -3563,6 +3736,8 @@ def analizar_opciones(o, argv):
             o.no_root = True
         elif a == "--no-virt-viewer":
             o.no_graficos = True
+        elif a == "--no-ficha":
+            o.no_ficha = True
         elif a == "--si":
             o.si = True
         elif a == "--listar":
@@ -3683,7 +3858,7 @@ def validar_modos(o):
                    "modos distintos: usa solo uno.")
     if o.modo_gestion:
         if (o.extra_disks or o.glusterfs or o.limpiar or o.no_wait or o.no_root
-                or o.no_graficos or o.tam_explicito
+                or o.no_graficos or o.no_ficha or o.tam_explicito
                 or (o.red_opt + o.disco_opt + o.base_opt + o.ram_opt + o.vcpus_opt
                     + o.ssh_pass + o.imagen_opt + o.discos_nodo_opt + o.ip_inicial_opt)):
             fallar(10, "Con --listar, --eliminar, --eliminar-todo y --menu solo se admiten "
@@ -3882,6 +4057,7 @@ def validar_entorno(o):
     if o.modo_gestion:
         return
 
+    ofrecer_crear_clave(o)
     comprobar_clave_publica(o)
 
     # Red: elegirla y leer sus datos reales
@@ -4180,6 +4356,7 @@ def ejecutar_provision(o, argv):
     # Sin argumentos y desde una terminal: el asistente con menús
     if not argv and sys.stdin.isatty() and sys.stdout.isatty() and prompt_toolkit_disponible():
         argv = ["--menu"]
+    o.argv = list(argv)
     analizar_opciones(o, argv)
     validar_opciones(o)
     calcular_derivados(o)

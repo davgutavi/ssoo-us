@@ -117,6 +117,8 @@ class Opciones:
         # Opciones
         self.extra_disks = self.glusterfs = self.cluster = self.limpiar = False
         self.dry_run = self.no_wait = self.no_root = self.no_graficos = self.si = False
+        self.no_ficha = False
+        self.argv = []                # la orden tal como se escribió (para la ficha)
         self.listar = self.eliminar = self.eliminar_todo = self.menu = False
         self.red_opt = self.disco_opt = self.base_opt = self.imagen_opt = ""
         self.discos_nodo_opt = self.ip_inicial_opt = self.ram_opt = self.vcpus_opt = ""
@@ -229,6 +231,9 @@ Opciones:
                        las máquinas que se crean a mano)
   --no-virt-viewer     No habilita la consola gráfica (virt-viewer). La consola de
                        texto (virsh console) sigue funcionando.
+  --no-ficha           No guarda la ficha de la máquina. Sin esta opción, el resumen
+                       final se guarda también en el silo, en MAQUINA-ficha.txt (en el
+                       clúster, una por nodo), y --eliminar la borra con la máquina.
   --limpiar            Si ya existen los dominios o discos que el script va a
                        crear, los elimina antes (solo esos; nada más), previa
                        confirmación
@@ -258,8 +263,8 @@ Ver y eliminar lo que ya tienes:
   --listar             Muestra tus máquinas (estado, IP, discos) y los discos del silo
                        que no usa ninguna. No lleva MAQUINA.
   --eliminar MAQUINA...
-                       Elimina esas máquinas con sus discos y sus ficheros cloud-init,
-                       previa confirmación. Nunca borra un disco que use otra máquina
+                       Elimina esas máquinas con sus discos, sus ficheros cloud-init y
+                       su ficha, previa confirmación. Nunca borra un disco que use otra máquina
                        ni una imagen de la que dependan otras copias.
   --eliminar-todo      Elimina todas tus máquinas (las {usuario}-*) con sus discos y
                        ofrece borrar los discos del silo que queden sin máquina.
@@ -269,8 +274,8 @@ Ver y eliminar lo que ya tienes:
                        sin argumentos desde una terminal.
 
 En todas las máquinas:
-  - Usuario 'administrador' con tu clave pública ({pubkey}) y
-    sudo sin contraseña. Sin contraseña propia salvo que uses --ssh-pass.
+  - Usuario 'administrador' con tu clave pública ({pubkey}; si no
+    tienes ninguna, te ofrece crearla) y sudo sin contraseña. Sin contraseña propia salvo que uses --ssh-pass.
     En las que salen de ubuntu-base (la base GlusterFS y sus nodos) se queda
     como en esa imagen: con la contraseña del boletín 1, que sudo pide; el
     script solo le añade tu clave pública.
@@ -326,6 +331,8 @@ def analizar_opciones(o, argv):
             o.no_root = True
         elif a == "--no-virt-viewer":
             o.no_graficos = True
+        elif a == "--no-ficha":
+            o.no_ficha = True
         elif a == "--si":
             o.si = True
         elif a == "--listar":
@@ -446,7 +453,7 @@ def validar_modos(o):
                    "modos distintos: usa solo uno.")
     if o.modo_gestion:
         if (o.extra_disks or o.glusterfs or o.limpiar or o.no_wait or o.no_root
-                or o.no_graficos or o.tam_explicito
+                or o.no_graficos or o.no_ficha or o.tam_explicito
                 or (o.red_opt + o.disco_opt + o.base_opt + o.ram_opt + o.vcpus_opt
                     + o.ssh_pass + o.imagen_opt + o.discos_nodo_opt + o.ip_inicial_opt)):
             fallar(10, "Con --listar, --eliminar, --eliminar-todo y --menu solo se admiten "
@@ -645,6 +652,7 @@ def validar_entorno(o):
     if o.modo_gestion:
         return
 
+    ofrecer_crear_clave(o)
     comprobar_clave_publica(o)
 
     # Red: elegirla y leer sus datos reales
@@ -943,6 +951,7 @@ def ejecutar_provision(o, argv):
     # Sin argumentos y desde una terminal: el asistente con menús
     if not argv and sys.stdin.isatty() and sys.stdout.isatty() and prompt_toolkit_disponible():
         argv = ["--menu"]
+    o.argv = list(argv)
     analizar_opciones(o, argv)
     validar_opciones(o)
     calcular_derivados(o)

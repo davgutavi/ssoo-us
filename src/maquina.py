@@ -106,6 +106,9 @@ def mostrar_plan_maquina(o):
     else:
         print("Al terminar cloud-init, se expulsaría su medio y la máquina se apagaría y se")
         print("volvería a arrancar, para que se ejecute con su configuración definitiva.")
+        if not o.no_ficha:
+            print("El resumen final se guardaría en %s (sin ella: --no-ficha)."
+                  % ruta_ficha(o, o.maquina))
     print()
     print("No se ha creado ni modificado ninguna máquina, disco ni red.")
 
@@ -174,7 +177,7 @@ def ejecutar_maquina(o):
     else:
         aviso_on_reboot([o.vm_name])
 
-    print_summary(o)
+    con_ficha(o, [(ruta_ficha(o, o.maquina), "de la máquina %s" % o.vm_name)], print_summary)
     avisar_known_hosts(o, [o.ip or o.ips_detectadas.get(o.vm_name, "")])
 
 
@@ -271,6 +274,87 @@ def avisar_known_hosts(o, ips):
                 print("       Al conectar por SSH verás un aviso de seguridad. Para resolverlo:")
                 avisado = True
             print('         ssh-keygen -f "%s" -R "%s"' % (kh, ip))
+
+
+# --- Ficha de la máquina ---------------------------------------------------------
+#
+# El resumen final se guarda también en el silo, en MAQUINA-ficha.txt: los
+# alumnos preguntan a menudo por esos datos (IP, contraseñas, cómo entrar). Lleva
+# las contraseñas, así que solo la puede leer su dueño. --eliminar la borra con
+# la máquina; solo se toca un fichero que lleve la marca de la primera línea
+# (nunca uno del alumno que se llame igual).
+
+MARCA_FICHA = "(la escribe ssoo-us provision)"
+
+
+def ruta_ficha(o, maquina):
+    return "%s/%s%s-ficha.txt" % (o.silo, o.prefijo_fichero, maquina)
+
+
+def primera_linea_ficha(ruta):
+    """La primera línea si RUTA es una ficha nuestra (un fichero, no un enlace,
+    con la marca); si no, None."""
+    if os.path.islink(ruta) or not os.path.isfile(ruta):
+        return None
+    datos = leer_bytes(ruta)
+    if datos is None:
+        return None
+    primera = datos.split(b"\n", 1)[0].decode("utf-8", "replace")
+    return primera if primera.startswith("Ficha ") and primera.endswith(MARCA_FICHA) else None
+
+
+def es_ficha_nuestra(ruta):
+    return primera_linea_ficha(ruta) is not None
+
+
+def orden_ejecutada(o):
+    """La orden con la que se creó, sin la contraseña de --ssh-pass."""
+    partes, anterior = [orden_provision()], ""
+    for a in o.argv:
+        partes.append("••••••" if anterior == "--ssh-pass" and a != "-" else a)
+        anterior = a
+    return " ".join(partes)
+
+
+def guardar_fichas(o, fichas, resumen):
+    """fichas: [(ruta, «de la máquina X» o «del nodo X»)]. Con --no-ficha no se guarda ninguna, y se
+    quita la que hubiera quedado de otra máquina con el mismo nombre."""
+    if o.no_ficha:
+        for ruta, _ in fichas:
+            if es_ficha_nuestra(ruta):
+                borrar_si_existe(ruta)
+        return
+    cabecera = ("Creada el %s con:\n  %s\n"
+                "Si su IP es por DHCP, puede cambiar; la de ahora te la da: %s %s--listar\n\n"
+                % (time.strftime("%d-%m-%Y a las %H:%M"), orden_ejecutada(o), orden_provision(),
+                   prefijo_en_orden(o)))
+    guardadas = []
+    for ruta, de_que in fichas:
+        if os.path.lexists(ruta) and not es_ficha_nuestra(ruta):
+            print("AVISO: no se guarda la ficha: ya existe %s y no es de esta herramienta." % ruta)
+            continue
+        try:
+            escribir_privado(ruta, "Ficha %s %s\n%s%s" % (de_que, MARCA_FICHA, cabecera, resumen))
+        except OSError as e:
+            print("AVISO: no se ha podido guardar la ficha %s: %s" % (ruta, e.strerror))
+            continue
+        guardadas.append(ruta)
+    if len(guardadas) == 1:
+        print("Estos datos quedan guardados en %s" % guardadas[0])
+        print("Para verlos otra vez:  cat %s" % guardadas[0])
+    elif guardadas:
+        print("Estos datos quedan guardados en una ficha por nodo, en %s:" % o.silo)
+        print("  %s" % "  ".join(os.path.basename(r) for r in guardadas))
+        print("Para verlos otra vez:  cat %s" % guardadas[0])
+
+
+def con_ficha(o, fichas, resumen):
+    """Escribe el resumen (la función RESUMEN) y lo guarda en las fichas."""
+    texto = io.StringIO()
+    with contextlib.redirect_stdout(texto):
+        resumen(o)
+    sys.stdout.write(texto.getvalue())
+    guardar_fichas(o, fichas, texto.getvalue())
 
 
 def print_summary_base(o):

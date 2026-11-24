@@ -52,7 +52,8 @@ Necesitas lo que se monta en el manual (secciones 5.2 y 5.3):
 
 - tu **silo** en `$HOME/imagenesMV`;
 - tu **red virtual** `TU_USUARIO-red` (compruébalo con `virsh net-list`);
-- tu **clave pública** en `$HOME/.ssh/id_rsa.pub` (si no la tienes: `ssh-keygen`).
+- tu **clave pública** en `$HOME/.ssh/id_rsa.pub` (si no tienes ninguna,
+  `ssoo-us provision` te ofrece crearla).
 
 La imagen cloud de Ubuntu 24.04 la descarga sola la primera vez. Trabaja
 siempre en tu silo, estés en el directorio que estés.
@@ -69,7 +70,8 @@ ssoo-us provision                             # asistente con menús
 De `MAQUINA` (por ejemplo, `server1`) salen el nombre de la máquina en libvirt
 (`TU_USUARIO-server1`), su nombre de host (`server1`) y su disco
 (`server1.qcow2`). Al terminar, espera a que la máquina esté configurada y te
-enseña su IP y cómo entrar.
+enseña su IP y cómo entrar. Esos datos quedan guardados en tu silo, en
+`server1-ficha.txt`: para verlos otra vez, `cat ~/imagenesMV/server1-ficha.txt`.
 
 Las opciones más usadas:
 
@@ -145,7 +147,7 @@ Se maneja con el teclado o con el **ratón**:
 
 ```bash
 ssoo-us provision --listar                     # tus máquinas, su estado, su IP y sus discos
-ssoo-us provision --eliminar server1           # una máquina, con sus discos
+ssoo-us provision --eliminar server1           # una máquina, con sus discos y su ficha
 ssoo-us provision --eliminar server1 server2 server3 server4 gluster-base   # el clúster entero
 ssoo-us provision --eliminar-todo              # todas
 ```

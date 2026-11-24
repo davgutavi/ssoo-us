@@ -65,7 +65,12 @@ wget https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd
 (con `curl`, cambia `wget … -O FICHERO` por `curl -L … -o FICHERO`)
 
 ## **4. Tu clave pública SSH**
-En `$HOME/.ssh/id_rsa.pub`. Si no la tienes, créala con `ssh-keygen`.
+En `$HOME/.ssh/id_rsa.pub`. Es la que te permite entrar en tus máquinas por SSH
+sin contraseña. Si no tienes ninguna clave, `ssoo-us provision` te ofrece
+crearla (sin contraseña) antes de empezar; también puedes crearla tú con
+`ssh-keygen`. Si tienes la privada (`~/.ssh/id_rsa`) pero has perdido la
+pública, **no generes otra** (perderías el acceso a las máquinas que ya tienes):
+recupérala con `ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub`.
 
 ---
 
@@ -109,10 +114,11 @@ De `MAQUINA` (por ejemplo `server1`) salen el nombre del dominio en libvirt
 | `--ssh-pass -` | Te pide una contraseña para `administrador` y permite entrar por SSH escribiéndola. Solo caracteres ASCII. También se puede escribir en la orden (`--ssh-pass CONTRASEÑA`), pero entonces la ven los demás usuarios del servidor mientras se ejecuta y queda en tu historial |
 | `--no-root` | No habilita al usuario `root` |
 | `--no-virt-viewer` | No habilita la consola gráfica. La consola de texto (`virsh console`) sigue funcionando |
+| `--no-ficha` | No guarda la [ficha de la máquina](#-la-ficha-de-la-máquina) (`MAQUINA-ficha.txt` en el silo) |
 | `--limpiar` | Si ya existen los dominios o discos que se van a crear, los elimina antes, previa confirmación. **Solo esos** |
 | `--si` | Da por contestadas que sí las confirmaciones de `--limpiar`, `--eliminar` y `--eliminar-todo`. Solo hace falta si lo lanzas sin terminal (desde otro script): entonces, sin `--si`, no elimina nada |
 | `--listar` | Muestra tus máquinas (estado, IP, discos) y los discos del silo que no usa ninguna |
-| `--eliminar MAQUINA...` | Elimina esas máquinas con sus discos y sus ficheros cloud-init, previa confirmación |
+| `--eliminar MAQUINA...` | Elimina esas máquinas con sus discos, sus ficheros cloud-init y su ficha, previa confirmación |
 | `--eliminar-todo` | Elimina todas tus máquinas con sus discos y ofrece borrar los discos que queden sin máquina |
 | `--menu` | Asistente con menús. Es lo que se abre al ejecutar `ssoo-us provision` sin argumentos |
 | `-h` | Ayuda |
@@ -129,8 +135,8 @@ fija: te propone la primera libre de tu red y te avisa enseguida si la que
 escribes no vale) y las opciones, y antes de ejecutar te muestra **el comando
 equivalente**, que es el que aprenderás a escribir. Todo lo que hace el
 asistente se puede hacer con las opciones de la tabla anterior. Para crear algo
-necesitas tu clave pública (`~/.ssh/id_rsa.pub`): si no la tienes, te lo dice
-antes de empezar a preguntar.
+necesitas tu clave pública (`~/.ssh/id_rsa.pub`): si no tienes ninguna, te
+ofrece crearla antes de empezar a preguntar.
 
 Se maneja con el teclado o con el **ratón**:
 
@@ -157,6 +163,22 @@ apaga y la vuelve a arrancar**: así se reinicia con normalidad cuando la
 reinicies desde dentro, y las instantáneas que tomes después conservan ese
 comportamiento. Al terminar muestra un resumen con los datos de la máquina y su
 IP.
+
+### 📄 La ficha de la máquina
+
+Ese resumen (IP, sistema, discos, cómo entrar, contraseñas) se guarda también en
+tu silo, en **`MAQUINA-ficha.txt`** (por ejemplo, `server1-ficha.txt`; en la
+infraestructura GlusterFS, una por nodo), para que puedas consultarlo cuando
+quieras:
+
+```bash
+cat ~/imagenesMV/server1-ficha.txt
+```
+
+Lleva también la fecha y la orden con la que se creó la máquina. Como puede
+llevar contraseñas, solo la puedes leer tú. Si la IP es por DHCP, puede cambiar
+con el tiempo: la de ahora te la da `ssoo-us provision --listar`. `--eliminar`
+la borra con la máquina. Si no la quieres, usa `--no-ficha`.
 
 > ⚠️ Con `--no-wait` (o si la espera se agota) ese último paso no se hace, y la
 > máquina **se apagaría en su primer reinicio**. Cuando termine de configurarse,
@@ -192,7 +214,7 @@ ssoo-us provision --eliminar server1
 ```
 
 Elimina `TU_USUARIO-server1` con **todos** sus discos (los que tenga conectados,
-según libvirt) y sus ficheros cloud-init, tras enseñarte la lista y pedir
+según libvirt), sus ficheros cloud-init y su ficha, tras enseñarte la lista y pedir
 confirmación. Puedes indicar varias máquinas a la vez; para deshacer la
 infraestructura GlusterFS entera:
 
@@ -463,7 +485,7 @@ esos directorios los puedes borrar cuando quieras.
 | **22** | No hay nada que eliminar, o no se ha podido eliminar | Comprueba el nombre con `--listar` |
 | **23** | Había que confirmar y no hay terminal para preguntar | Ejecútalo desde una terminal, o añade `--si` si de verdad quieres hacerlo sin preguntas |
 | **30** | No existe el silo | Crear `$HOME/imagenesMV` y mapearlo en el hipervisor |
-| **31** | No existe la clave pública, o el fichero no contiene una sola clave | `ssh-keygen` |
+| **31** | No existe la clave pública (y no has querido que la cree, o no hay terminal para preguntarte), o el fichero no contiene una sola clave | `ssh-keygen`; con la privada y sin la pública, `ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub` |
 | **37** | No se ha podido descargar la imagen base, no coincide con su suma publicada, o la que hay está corrupta | El mensaje indica el `wget` manual, o el `rm` para que se vuelva a descargar |
 | **38** | Faltan herramientas (incluido `wget`/`curl` para descargar la imagen, o `prompt_toolkit` para el asistente) o no hay conexión con libvirt | Avisar al profesor |
 | **39** | La imagen indicada con `--base` no existe, no es un `qcow2`, le falta la imagen de la que es copia o es el disco de una máquina; o no está `/home/ssoo-shared/ubuntu-base.qcow2` (con `--imagen ubuntu-base`) | Revisa el nombre; debe estar en el silo. Sin ubuntu-base, usa la imagen por defecto |

@@ -9,9 +9,11 @@ Este archivo se genera con tools/build.py a partir de src/: no lo edite a mano.
 """
 
 import base64
+import contextlib
 import glob
 import grp
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -38,7 +40,7 @@ except ImportError:  # diagnosis: sin PyYAML se omiten las comprobaciones de est
 # Cada instalación en los servidores lleva su versión (tools/instalar.sh no
 # instala un ssoo-us distinto con la misma): se sube con cada una. X.Y.Z:
 # Z para correcciones, Y para novedades, X si cambia la forma de usarlo.
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 PROGRAMA = "ssoo-us"
 
 

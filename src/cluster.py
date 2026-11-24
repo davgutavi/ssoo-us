@@ -265,5 +265,7 @@ def ejecutar_cluster(o):
         if sin_terminar:
             aviso_on_reboot(sin_terminar)
 
-    print_summary_cluster(o)
+    con_ficha(o, [(ruta_ficha(o, host), "del nodo %s-%s de la infraestructura GlusterFS"
+                   % (o.prefijo_dominio, host)) for host in CLUSTER_NODOS],
+              print_summary_cluster)
     avisar_known_hosts(o, o.cluster_ips)

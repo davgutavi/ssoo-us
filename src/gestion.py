@@ -138,11 +138,12 @@ class PlanEliminacion:
         self.dominios = []
         self.ficheros = []
         self.dirs = []
+        self.fichas = []
         self.conservados = []
         self.sin_nada = []
 
     def hay_algo(self):
-        return bool(self.dominios or self.ficheros or self.dirs)
+        return bool(self.dominios or self.ficheros or self.dirs or self.fichas)
 
 
 def planificar_eliminacion(o, nombres):
@@ -175,6 +176,9 @@ def planificar_eliminacion(o, nombres):
             if os.path.isdir(d):
                 plan.dirs.append(d)
                 habia = True
+        if es_ficha_nuestra(ruta_ficha(o, m)):
+            plan.fichas.append(ruta_ficha(o, m))
+            habia = True
         if not habia:
             plan.sin_nada.append(m)
 
@@ -198,6 +202,8 @@ def mostrar_plan_eliminacion(o, plan):
             print("  disco    %s" % f)
         for x in plan.dirs:
             print("  ficheros %s/" % x)
+        for x in plan.fichas:
+            print("  ficha    %s" % x)
     if plan.conservados:
         print("Se conserva:")
         for x in plan.conservados:
@@ -220,6 +226,9 @@ def ejecutar_eliminacion(plan):
     for x in plan.dirs:
         borrar_ruta(x)
         print("  ✔ ficheros %s eliminados" % x)
+    for x in plan.fichas:
+        borrar_si_existe(x)
+        print("  ✔ ficha %s eliminada" % x)
 
 
 def cancelar_eliminacion():
@@ -258,6 +267,11 @@ def eliminar_todo(o):
     for d in sorted(glob.glob(patron)):
         if os.path.isdir(d) and d not in plan.dirs:
             plan.dirs.append(d)
+    # Y sus fichas (las de las máquinas con su prefijo de dominio)
+    for f in ficheros_del_silo(o, glob.escape(o.prefijo_fichero) + "*-ficha.txt"):
+        primera = primera_linea_ficha(f)
+        if primera and " %s-" % o.prefijo_dominio in primera and f not in plan.fichas:
+            plan.fichas.append(f)
 
     # Discos del silo que quedarían sin máquina, salvo las imágenes cloud. Se
     # comprueba contra todos los dominios del servidor y contra todas las copias
