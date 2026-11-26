@@ -1,0 +1,66 @@
+#!/bin/bash
+# virsh simulado de ssoo-us (tests/aceptacion/silo-red.bats). Añade al de
+# ci-provision (mocks/virsh, importado: no se toca) los silos (pool-*) y la
+# creación de redes (net-define, net-start, net-autostart, net-undefine); el
+# resto se lo pasa a él. Estado, en $MOCK_STATE, además del suyo:
+#   silo-NOMBRE            destino del silo de libvirt
+#   silo-NOMBRE.activo     si está activo
+#   red-NOMBRE.autostart   si la red arranca sola
+#
+#   MOCK_FALLA="orden ..."  esas órdenes fallan (p.ej. "net-start pool-define-as")
+
+S="${MOCK_STATE:?MOCK_STATE no definido}"
+ORIGINAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/../mocks" && pwd)/virsh"
+cmd="${1:-}"
+
+case "$cmd" in
+    pool-*|net-define|net-start|net-autostart|net-undefine) ;;
+    *) exec "$ORIGINAL" "$@" ;;
+esac
+
+echo "virsh $*" >> "$S/log"
+shift
+if [[ " ${MOCK_FALLA:-} " == *" $cmd "* ]]; then
+    echo "error: $cmd ha fallado (simulado)" >&2
+    exit 1
+fi
+
+case "$cmd" in
+    pool-info)
+        [[ -f "$S/silo-$1" ]] || { echo "error: failed to get pool '$1'" >&2; exit 1; }
+        estado=inactive
+        [[ -f "$S/silo-$1.activo" ]] && estado=running
+        printf 'Name:           %s\nState:          %s\n' "$1" "$estado" ;;
+    pool-dumpxml)
+        [[ -f "$S/silo-$1" ]] || { echo "error: failed to get pool '$1'" >&2; exit 1; }
+        printf "<pool type='dir'><name>%s</name><target><path>%s</path></target></pool>\n" \
+            "$1" "$(cat "$S/silo-$1")" ;;
+    pool-define-as)
+        # pool-define-as NOMBRE dir --target RUTA
+        echo "$4" > "$S/silo-$1" ;;
+    pool-start)
+        [[ -f "$S/silo-$1" ]] || exit 1
+        touch "$S/silo-$1.activo" ;;
+    pool-autostart)
+        [[ -f "$S/silo-$1" ]] || exit 1 ;;
+    net-define)
+        nombre="$(sed -n 's:.*<name>\(.*\)</name>.*:\1:p' "$1" | head -1)"
+        cp "$1" "$S/red-$nombre.xml"
+        echo "$nombre" >> "$S/redes.txt"
+        touch "$S/red-$nombre.inactiva"
+        echo "Network $nombre defined from $1" ;;
+    net-start)
+        [[ -f "$S/red-$1.xml" ]] || exit 1
+        rm -f "$S/red-$1.inactiva" ;;
+    net-autostart)
+        [[ -f "$S/red-$1.xml" ]] || exit 1
+        touch "$S/red-$1.autostart" ;;
+    net-undefine)
+        rm -f "$S/red-$1.xml" "$S/red-$1.inactiva"
+        grep -vx "$1" "$S/redes.txt" > "$S/redes.tmp" || true
+        mv "$S/redes.tmp" "$S/redes.txt" ;;
+    *)
+        echo "error: mock virsh de ssoo-us: subcomando no soportado '$cmd'" >&2
+        exit 1 ;;
+esac
+exit 0

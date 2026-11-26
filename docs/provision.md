@@ -24,12 +24,21 @@ Debe estar configurado en el trayecto:
 $HOME/imagenesMV/
 ```
 
+Si no lo tienes, `ssoo-us provision` te ofrece crearlo antes de empezar, como en
+la sección 5.2 del manual: el directorio y, en libvirt, el silo
+`TU_USUARIO-imagenesMV` que apunta a él (activo y con arranque automático).
+
 ## **2. Tener una red virtual creada**
 Con el nombre `TU_USUARIO-red`. Compruébalo con:
 
 ```bash
 virsh net-list
 ```
+
+Si no tienes ninguna, `ssoo-us provision` te ofrece crearla antes de empezar,
+como en la sección 5.3 del manual (NAT, `192.168.XXX.0/24`, con DHCP de la
+`.128` a la `.254`, sin IPv6) salvo en una cosa: `XXX` no sale de tu DNI, sino
+que es la primera red libre del servidor. La pregunta te dice cuál será.
 
 Si tu red se llama de otra forma, `ssoo-us provision` la encontrará igualmente
 siempre que empiece por tu nombre de usuario. Si tienes varias, o se llama de
@@ -116,7 +125,7 @@ De `MAQUINA` (por ejemplo `server1`) salen el nombre del dominio en libvirt
 | `--no-virt-viewer` | No habilita la consola gráfica. La consola de texto (`virsh console`) sigue funcionando |
 | `--no-ficha` | No guarda la [ficha de la máquina](#-la-ficha-de-la-máquina) (`MAQUINA-ficha.txt` en el silo) |
 | `--limpiar` | Si ya existen los dominios o discos que se van a crear, los elimina antes, previa confirmación. **Solo esos** |
-| `--si` | Da por contestadas que sí las confirmaciones de `--limpiar`, `--eliminar` y `--eliminar-todo`. Solo hace falta si lo lanzas sin terminal (desde otro script): entonces, sin `--si`, no elimina nada |
+| `--si` | Da por contestadas que sí las confirmaciones de `--limpiar`, `--eliminar` y `--eliminar-todo`. Solo hace falta si lo lanzas sin terminal (desde otro script): entonces, sin `--si`, no elimina nada. También crea sin preguntar el silo, la clave SSH y la red virtual si te faltan |
 | `--listar` | Muestra tus máquinas (estado, IP, discos) y los discos del silo que no usa ninguna |
 | `--eliminar MAQUINA...` | Elimina esas máquinas con sus discos, sus ficheros cloud-init y su ficha, previa confirmación |
 | `--eliminar-todo` | Elimina todas tus máquinas con sus discos y ofrece borrar los discos que queden sin máquina |
@@ -484,12 +493,12 @@ esos directorios los puedes borrar cuando quieras.
 | **21** | Ya existe el dominio o algún disco, o un disco lo usa otra máquina | El mensaje indica cómo eliminarlos, o usa `--limpiar` |
 | **22** | No hay nada que eliminar, o no se ha podido eliminar | Comprueba el nombre con `--listar` |
 | **23** | Había que confirmar y no hay terminal para preguntar | Ejecútalo desde una terminal, o añade `--si` si de verdad quieres hacerlo sin preguntas |
-| **30** | No existe el silo | Crear `$HOME/imagenesMV` y mapearlo en el hipervisor |
+| **30** | No existe el silo (y no has querido que lo cree, o no hay terminal para preguntarte) | Crear `$HOME/imagenesMV` y mapearlo en el hipervisor |
 | **31** | No existe la clave pública (y no has querido que la cree, o no hay terminal para preguntarte), o el fichero no contiene una sola clave | `ssh-keygen`; con la privada y sin la pública, `ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub` |
 | **37** | No se ha podido descargar la imagen base, no coincide con su suma publicada, o la que hay está corrupta | El mensaje indica el `wget` manual, o el `rm` para que se vuelva a descargar |
 | **38** | Faltan herramientas (incluido `wget`/`curl` para descargar la imagen, o `prompt_toolkit` para el asistente) o no hay conexión con libvirt | Avisar al profesor |
 | **39** | La imagen indicada con `--base` no existe, no es un `qcow2`, le falta la imagen de la que es copia o es el disco de una máquina; o no está `/home/ssoo-shared/ubuntu-base.qcow2` (con `--imagen ubuntu-base`) | Revisa el nombre; debe estar en el silo. Sin ubuntu-base, usa la imagen por defecto |
-| **40** | No se encuentra tu red virtual, o el nombre dado a `--red` no es válido | Créala con el nombre `TU_USUARIO-red`, o usa `--red` |
+| **40** | No se encuentra tu red virtual (y no has querido que la cree, o no hay terminal para preguntarte), el nombre dado a `--red` no es válido, o no se ha podido crear la red | Créala con el nombre `TU_USUARIO-red`, o usa `--red` |
 | **41** | IP no válida o fuera de tu red | El mensaje indica las IPs libres de tu red |
 | **42** | IP ocupada: por el DHCP, por una reserva, por otra de tus máquinas o por algo que ya responde en ella | El mensaje indica las IPs libres de tu red (y, en el clúster, qué `--ip-inicial` usar) |
 | **43** | No se puede interpretar la red | Revisar `virsh net-dumpxml TU_RED` |

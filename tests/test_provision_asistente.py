@@ -128,7 +128,8 @@ class FalsasPantallas:
 class Asistido(unittest.TestCase):
     """El asistente con pantallas falsas; lo que lanzaría se anota sin lanzarlo."""
 
-    def asistente(self, respuestas, *argv, preparar=None, en_uso=None, clave=True):
+    def asistente(self, respuestas, *argv, preparar=None, en_uso=None, clave=True,
+                  red_nueva=None, crear_red=None):
         s = Silo("--menu", *argv)
         self.addCleanup(s.tmp.cleanup)
         if clave:
@@ -150,7 +151,13 @@ class Asistido(unittest.TestCase):
                 su.fallar(42, "Algo responde ya en la IP '%s'." % ip)
 
         red = su.RedIPv4("alu0000-red", "192.168.7.1", 24, [("192.168.7.128", "192.168.7.254")])
+        # Sin red_nueva, el alumno ya tiene red: no se ofrece crear ninguna (con
+        # un ErrorProvision, no queda ninguna libre)
         with mock.patch.object(su, "red_del_usuario", return_value=red), \
+                mock.patch.object(su, "red_para_ofrecer",
+                                  **({"side_effect": red_nueva} if isinstance(red_nueva, Exception)
+                                     else {"return_value": red_nueva})), \
+                mock.patch.object(su, "crear_red", crear_red or su.crear_red), \
                 mock.patch.object(su, "comprobar_ip_en_uso", comprobar_en_uso), \
                 mock.patch.object(su.subprocess, "call", call), \
                 mock.patch.object(su, "pausa"), \

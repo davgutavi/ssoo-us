@@ -18,6 +18,8 @@ class TestArnes(unittest.TestCase):
                                  leer(os.path.join(ACEPTACION, "ci-provision.bats")), re.M)
         cls.del_asistente = re.findall(r'^@test "(.*)" \{$',
                                        leer(os.path.join(ACEPTACION, "asistente.bats")), re.M)
+        cls.de_silo_red = re.findall(r'^@test "(.*)" \{$',
+                                     leer(os.path.join(ACEPTACION, "silo-red.bats")), re.M)
 
     def test_156_tests(self):
         self.assertEqual(len(self.nombres), 156)
@@ -26,6 +28,10 @@ class TestArnes(unittest.TestCase):
     def test_los_del_asistente(self):
         self.assertEqual(len(self.del_asistente), 13)
         self.assertTrue(all(n.startswith("ssoo-us asistente: ") for n in self.del_asistente))
+
+    def test_los_de_silo_y_red(self):
+        self.assertEqual(len(self.de_silo_red), 7)
+        self.assertTrue(all(n.startswith("ssoo-us ") for n in self.de_silo_red))
 
     def test_cada_test_en_una_fase(self):
         fases = {}
@@ -36,7 +42,8 @@ class TestArnes(unittest.TestCase):
             self.assertIn(fase, "0123456", linea)
             self.assertNotIn(nombre, fases, "repetido en fases.txt: %s" % nombre)
             fases[nombre] = fase
-        self.assertEqual(set(fases), set(self.nombres) | set(self.del_asistente))
+        self.assertEqual(set(fases), set(self.nombres) | set(self.del_asistente)
+                         | set(self.de_silo_red))
 
     def test_envoltorio(self):
         envoltorio = os.path.join(ACEPTACION, "ssoo-us-provision")

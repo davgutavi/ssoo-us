@@ -1,0 +1,6 @@
+#!/bin/bash
+# ip simulado: «ip -4 route show» da las rutas de $MOCK_STATE/rutas (ninguna si
+# no existe), para que los tests no dependan de las del equipo que los pasa.
+echo "ip $*" >> "${MOCK_STATE:?}/log"
+cat "$MOCK_STATE/rutas" 2>/dev/null
+exit 0

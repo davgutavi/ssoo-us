@@ -11,6 +11,8 @@
 #   5  --listar, --eliminar y --eliminar-todo
 #   6  asistente (--menu); los de ci-provision.bats se omiten (skip) y están, con
 #      el nombre «ssoo-us asistente: …», en asistente.bats
+# Los de silo-red.bats (crear el silo y la red, de la 1.3.0) van en la fase de lo
+# que comprueban: 2 si no crean ninguna máquina, 3 si la crean, 5 el de --listar.
 0	ci-provision.sh está al día respecto a src/ y lib/
 0	auditoría 18: los fuentes funcionan sin generar el script (src/main.sh carga todas las librerías)
 1	muestra la ayuda con -h y con --help
@@ -180,3 +182,10 @@
 6	ssoo-us asistente: rechaza nombres que empiezan por '-' y la ficha respeta --prefijo
 6	ssoo-us asistente: DHCP o IP fija; con IP fija, la primera libre y los avisos en el mismo paso
 6	ssoo-us asistente: sin clave SSH ofrece crearla antes de las pantallas de crear
+3	ssoo-us sin silo ni red, con --si: crea el silo, la red y la máquina
+2	ssoo-us sin silo y sin terminal: error 30, sin crear nada
+2	ssoo-us sin red y sin terminal: error 40, sin crear nada
+2	ssoo-us sin red, con --si y --dry-run: no la crea (error 40)
+5	ssoo-us --listar sin silo: error 30, también con --si
+2	ssoo-us sin red, si ninguna arranca: prueba cinco, se deshace y error 40
+3	ssoo-us sin silo, si libvirt no deja registrarlo: avisa y sigue con el directorio

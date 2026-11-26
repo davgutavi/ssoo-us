@@ -26,6 +26,7 @@ import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import termios
 import textwrap
 import time
@@ -40,7 +41,7 @@ except ImportError:  # diagnosis: sin PyYAML se omiten las comprobaciones de est
 # Cada instalación en los servidores lleva su versión (tools/instalar.sh no
 # instala un ssoo-us distinto con la misma): se sube con cada una. X.Y.Z:
 # Z para correcciones, Y para novedades, X si cambia la forma de usarlo.
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 PROGRAMA = "ssoo-us"
 
 

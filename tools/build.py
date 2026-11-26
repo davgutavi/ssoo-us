@@ -12,7 +12,7 @@ import os
 import sys
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORDEN = ["base", "red", "claves", "imagenes", "cloudinit", "virsh", "limpieza", "espera",
+ORDEN = ["base", "red", "claves", "imagenes", "cloudinit", "virsh", "limpieza", "entorno", "espera",
          "maquina", "cluster", "gestion", "pantallas", "asistente", "provision",
          "diagnosis_base", "diagnosis_textos", "diagnosis_claves", "diagnosis_archivos",
          "diagnosis_servidor", "diagnosis_acceso", "diagnosis_disco", "diagnosis", "acceso",

@@ -41,4 +41,5 @@ if [[ "${1:-}" == --fase ]]; then
     set -- -f "^($filtro)\$" "$@"
 fi
 
-exec "$BATS" "$@" "$RAIZ/tests/aceptacion/ci-provision.bats" "$RAIZ/tests/aceptacion/asistente.bats"
+exec "$BATS" "$@" "$RAIZ/tests/aceptacion/ci-provision.bats" "$RAIZ/tests/aceptacion/asistente.bats" \
+    "$RAIZ/tests/aceptacion/silo-red.bats"

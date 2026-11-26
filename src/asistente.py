@@ -130,7 +130,12 @@ class Asistente:
             if sel in (ATRAS, SALIR, "salir"):
                 salir_asistente()
             ultima = sel
-            if sel in ("basica", "extra", "cluster", "base") and not self.clave_lista():
+            if sel in ("basica", "extra", "cluster", "base") and not self.entorno_listo():
+                continue
+            if sel in ("listar", "eliminar", "todo") and not os.path.isdir(self.o.silo):
+                self.p.aviso("No tienes silo (%s): todavía no hay máquinas ni discos que ver o "
+                             "eliminar.\nSe te ofrece crearlo al elegir una de las opciones de "
+                             "crear." % self.o.silo)
                 continue
             if sel in ("basica", "extra"):
                 self.maquina(sel)
@@ -145,26 +150,42 @@ class Asistente:
             elif sel == "todo":
                 recorrer([lambda: self.lanzar(["--eliminar-todo"])])
 
-    def clave_lista(self):
-        """Antes de las pantallas de crear algo: sin una clave pública válida,
-        provision fallaría con el error 31 al final, con todo ya rellenado. Si no
-        tiene ninguna, se le ofrece crearla. Ver y eliminar máquinas no la
-        necesitan."""
+    def entorno_listo(self):
+        """Antes de las pantallas de crear algo: sin silo, sin red o sin una
+        clave pública válida, provision fallaría al final, con todo ya
+        rellenado. Si falta alguno, se ofrece crearlo, cada uno con su
+        pantalla. Ver y eliminar máquinas no los necesitan."""
         o = self.o
         try:
+            if not o.dry_run and falta_el_silo(o):
+                if not self.aceptar(PREGUNTA_CREAR_SILO % (o.silo, NOMBRE_SILO_LIBVIRT % o.usuario),
+                                    "Crearlo"):
+                    return False
+                self.p.aviso("\n".join(crear_silo(o)))
+            exigir_silo(o)
+            # El mismo orden que sin el asistente (validar_entorno): silo, clave, red
             if not o.dry_run and se_puede_crear_la_clave(o):
-                r = self.p.confirmar(PREGUNTA_CREAR_CLAVE % (o.home + "/.ssh/id_rsa"),
-                                     si="Crearla", no="Atrás")
-                if r == SALIR:
-                    salir_asistente()
-                if r is not True:
+                if not self.aceptar(PREGUNTA_CREAR_CLAVE % (o.home + "/.ssh/id_rsa"), "Crearla"):
                     return False
                 self.p.aviso("\n".join(crear_clave(o)))
             comprobar_clave_publica(o)
+            base = None if o.dry_run else red_para_ofrecer(o)
+            if base is not None:
+                if not self.aceptar(PREGUNTA_CREAR_RED % (NOMBRE_RED_NUEVA % o.usuario, base),
+                                    "Crearla"):
+                    return False
+                self.p.aviso("\n".join(crear_red(o, base)))
         except ErrorProvision as e:
-            self.p.aviso(e.mensaje + "\n\nCuando la tengas, vuelve a elegir esta opción.")
+            self.p.aviso(e.mensaje + "\n\nCuando lo tengas, vuelve a elegir esta opción.")
             return False
         return True
+
+    def aceptar(self, pregunta, si):
+        """Pantalla de sí («si») o Atrás. True si acepta."""
+        r = self.p.confirmar(pregunta, si=si, no="Atrás")
+        if r == SALIR:
+            salir_asistente()
+        return r is True
 
     # --- Pasos comunes ---
 

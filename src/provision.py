@@ -240,6 +240,8 @@ Opciones:
   --si                 Da por contestadas que sí las confirmaciones de --limpiar,
                        --eliminar y --eliminar-todo. Sin terminal (p.ej. desde otro
                        script) son obligatorias: sin --si no se elimina nada.
+                       También crea sin preguntar el silo, la clave SSH y la red
+                       virtual si te faltan.
   --red NOMBRE         Red virtual a usar (por defecto se busca {usuario}-red)
   --prefijo PREFIJO    Sustituye a tu usuario en los nombres: dominio PREFIJO-MAQUINA
                        y, en ese caso, también los discos (PREFIJO-MAQUINA.qcow2)
@@ -645,17 +647,22 @@ def validar_entorno(o):
     if not virsh_ok("list", "--name"):
         fallar(38, "No se puede conectar con libvirt (virsh).\n"
                    "¿Estás en el servidor de la asignatura? Prueba: virsh list --all")
-    if not os.path.isdir(o.silo):
-        fallar(30, "No existe el silo en: %s\nCréalo con: mkdir -p %s\n"
-                   "y mapéalo como silo en el hipervisor, como se explica en el capítulo de "
-                   "infraestructura virtual." % (o.silo, o.silo))
+    # El asistente comprueba el silo, la red y la clave (y ofrece crearlos)
+    # antes de las pantallas de crear (Asistente.entorno_listo)
+    if o.menu:
+        return
+    # Si falta el silo, se ofrece crearlo; al ver o eliminar máquinas, no
+    if not o.modo_gestion:
+        ofrecer_crear_silo(o)
+    exigir_silo(o)
     if o.modo_gestion:
         return
 
     ofrecer_crear_clave(o)
     comprobar_clave_publica(o)
 
-    # Red: elegirla y leer sus datos reales
+    # Red: elegirla (si no tiene ninguna, se ofrece crearla) y leer sus datos reales
+    ofrecer_crear_red(o)
     o.red = cargar_red(detectar_red(o))
 
     # IPs fijas, contra la red real
@@ -702,13 +709,7 @@ def detectar_red(o):
                        "Consulta las redes disponibles con: virsh net-list --all" % o.red_opt)
         nombre = o.red_opt
     else:
-        usuario = minusculas_c(o.usuario)
-        candidatas = []
-        for r in lineas_no_vacias(virsh_salida("net-list", "--all", "--name")):
-            r_min = minusculas_c(r)
-            if (r_min == usuario or r_min.startswith(usuario + "-")
-                    or r_min.startswith(usuario + "_")):
-                candidatas.append(r)
+        candidatas = redes_del_usuario(o)
         if o.usuario + "-red" in candidatas:
             nombre = o.usuario + "-red"
         elif len(candidatas) == 1:

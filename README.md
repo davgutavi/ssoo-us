@@ -49,12 +49,13 @@ tienen:
 <a id="antes"></a>
 ## 📌 Antes de empezar
 
-Necesitas lo que se monta en el manual (secciones 5.2 y 5.3):
+Necesitas lo que se monta en el manual (secciones 5.2 y 5.3). Si te falta
+alguna de estas tres cosas, `ssoo-us provision` te ofrece crearla (te pregunta
+antes por cada una):
 
 - tu **silo** en `$HOME/imagenesMV`;
 - tu **red virtual** `TU_USUARIO-red` (compruébalo con `virsh net-list`);
-- tu **clave pública** en `$HOME/.ssh/id_rsa.pub` (si no tienes ninguna,
-  `ssoo-us provision` te ofrece crearla).
+- tu **clave pública** en `$HOME/.ssh/id_rsa.pub`.
 
 La imagen cloud de Ubuntu 24.04 la descarga sola la primera vez. Trabaja
 siempre en tu silo, estés en el directorio que estés.

@@ -24,6 +24,7 @@ src/base.py       Importaciones, versión, lo que comparten provision y diagnosi
 src/red.py        Red virtual: XML de libvirt y aritmética de IPv4 (se compartirá
                   con diagnosis)
 src/claves.py     provision: la clave pública del alumno
+src/entorno.py    provision: crear el silo y la red si no los tiene
 src/imagenes.py   provision: imágenes de partida (y su descarga), qemu-img,
                   --base, tamaño y creación de discos
 src/cloudinit.py  provision: user-data, meta-data y network-config
@@ -147,8 +148,11 @@ sirvan.
 tests/aceptacion/
   ci-provision.bats    importado (no se edita)
   asistente.bats       los del asistente de ssoo-us (estos sí se editan)
+  silo-red.bats        crear el silo y la red (de ssoo-us; se editan)
   helpers.bash         importado (no se edita)
   mocks/               importados (no se editan)
+  mocks-ssoo-us/       virsh (silos y crear redes; el resto, al de mocks/) e ip,
+                       para silo-red.bats (de ssoo-us; se editan)
   ORIGEN               de qué commit de ci-provision salen
   fases.txt            en qué fase del port tiene que pasar cada test
   ssoo-us-provision    el envoltorio
@@ -203,8 +207,8 @@ Usa el Python de `.venv` si existe y, si no, el `python3` del `PATH`
 test de `ci-provision.bats` está en una fase y solo en una: si se reimportan
 tests nuevos, hay que asignarles fase.
 
-Hoy pasan todos: 143 de `ci-provision.bats` (y los 13 omitidos) y los 11 de
-`asistente.bats`. Para comprobar el propio arnés se puede lanzar contra
+Hoy pasan todos: 143 de `ci-provision.bats` (y los 13 omitidos), los 13 de
+`asistente.bats` y los 7 de `silo-red.bats`. Para comprobar el propio arnés se puede lanzar contra
 `ci-provision.sh` con un envoltorio que quite la palabra `provision`
 (`SSOO_US=envoltorio SSOO_US_PYTHON=$(command -v bash)`): entonces pasan todos
 menos los seis que dependen de las sustituciones de `$ORDEN` y de `--version`.
@@ -278,11 +282,12 @@ el asistente:
   en lo que lanza, lo interrumpe y lo deshace (mientras trabaja el proceso hijo,
   el padre atiende SIGINT con un manejador que no hace nada; no lo ignora,
   porque el hijo heredaría la señal ignorada y ya no podría atraparla).
-  Antes de las pantallas de crear algo comprueba la clave pública (la misma
-  comprobación del error 31): si falta o no vale, lo avisa y vuelve al menú, en
-  vez de dejar que el alumno lo rellene todo y que la orden falle al final (en
-  `ci-provision`, `--menu` se salta esa comprobación). Ver y eliminar no la
-  necesitan.
+  Antes de las pantallas de crear algo comprueba el silo, la red y la clave
+  pública (las comprobaciones de los errores 30, 40 y 31), y ofrece crear lo
+  que falte: si falta o no vale, lo avisa y vuelve al menú, en vez de dejar que
+  el alumno lo rellene todo y que la orden falle al final (en `ci-provision`,
+  `--menu` se salta la de la clave). Ver y eliminar no los necesitan; desde la
+  1.3.0, `--menu` sin silo abre el asistente en lugar de dar el error 30.
 
 Y dos añadidos de la 1.2.0 (David, 24-nov), que no cambian nada de lo que
 comprueban los tests heredados:
@@ -306,6 +311,39 @@ comprueban los tests heredados:
   exista la máquina); `--eliminar-todo`, las de sus dominios; con `--no-ficha`
   se quita la que hubiera quedado de una máquina anterior con ese nombre. La
   base GlusterFS suelta (`--glusterfs`) no tiene ficha: no es una máquina.
+
+Y otro de la 1.3.0 (David, 26-nov), por el mismo motivo que la clave:
+
+- **Crear el silo y la red** (`entorno.py`). Si no tiene silo o red, se le
+  ofrece crearlos, cada uno con su pregunta, como en las secciones 5.2 y 5.3 del
+  manual: el directorio `~/imagenesMV` y el silo de libvirt
+  `USUARIO-imagenesMV` (`pool-define-as … dir --target`, `pool-start`,
+  `pool-autostart`); la red `USUARIO-red`, NAT, `192.168.X.0/24`, DHCP de la
+  `.128` a la `.254`, sin IPv6 (`net-define`, `net-start`, `net-autostart`). `X`
+  no puede salir del DNI, como en el manual: es la primera `/24` que no se solapa
+  con ninguna red de libvirt del servidor (de cualquier usuario, también las
+  paradas: `net-list --all`) ni con sus rutas (`ip -4 route show table all`,
+  también las `blackhole`, `unreachable`...). Igual que la clave: `[s/N]` desde
+  una terminal (entrada y salida), sin preguntar con `--si`, una pantalla en el
+  asistente; sin terminal o con `--dry-run`, los errores 30 y 40 de siempre. El
+  orden es el mismo en la línea de órdenes y en el asistente: silo, clave, red.
+  Ver y eliminar máquinas no ofrecen nada (error 30; en el asistente, una
+  pantalla que dice que no hay silo).
+  - Silo: si no se puede crear el directorio, error 30 con el motivo. Si ya
+    hay un silo de libvirt (de cualquier nombre) que apunta a `~/imagenesMV`, se
+    usa ese; si el suyo apunta a otro sitio, no se toca. Si libvirt no deja
+    registrarlo o arrancarlo, se avisa (con la orden que falta) y se sigue: a
+    provision le basta el directorio.
+  - Red: antes de preguntar se dice que se está buscando (son un `net-dumpxml`
+    por cada red del servidor). Si no queda ninguna libre, error 40 que lo dice.
+    Si no arranca (otro alumno ha cogido la misma a la vez, o algo que la
+    búsqueda no ve la usa), se deshace (`net-undefine`) y se prueba con la
+    siguiente libre, hasta `INTENTOS_RED` (5) veces; si ninguna arranca, error
+    40 con las que se han probado. Con `--red` no se ofrece crear ninguna.
+  - Tests: `test_provision_silo_red.py` y `tests/aceptacion/silo-red.bats`, con
+    un `virsh` propio (`tests/aceptacion/mocks-ssoo-us/virsh`, que añade
+    `pool-*` y la creación de redes y pasa el resto al de `ci-provision`) y un
+    `ip` simulado.
 
 ### Pruebas de equivalencia con `ci-diagnosis`
 
