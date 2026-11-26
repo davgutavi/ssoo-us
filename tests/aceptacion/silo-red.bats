@@ -17,6 +17,8 @@ setup() {
     quitar_red "${USUARIO}-red"
     definir_red "otro-red" 192.168.1.1 255.255.255.0 192.168.1.128 192.168.1.254
     echo "192.168.2.0/24 dev eth1 proto kernel scope link src 192.168.2.5" > "$MOCK_STATE/rutas"
+    # Con la umask de una cuenta con grupo propio (002), como en los servidores
+    umask 002
     run bash "$SCRIPT" --si --no-wait server1 </dev/null
     assert_success
     assert_output --partial "No tienes silo: el directorio $SILO"
@@ -33,6 +35,10 @@ setup() {
     # Y la máquina, en la red nueva y en el silo nuevo
     dominio_existe "${USUARIO}-server1"
     [ -e "$SILO/server1.qcow2" ]
+    # La imagen descargada, en 0644 aunque la umask sea 002 (no la puede
+    # escribir el grupo kvm cuando libvirt se la asigna)
+    local imagen="$SILO/noble-server-cloudimg-amd64.img"
+    [ "$(stat -f %Lp "$imagen" 2>/dev/null || stat -c %a "$imagen")" = "644" ]
     grep -q "network=${USUARIO}-red" "$MOCK_STATE/log"
 }
 

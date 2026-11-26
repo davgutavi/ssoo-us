@@ -101,3 +101,45 @@ class TestResumenDelCluster(unittest.TestCase):
         self.assertIn("(nodos):", texto)
         self.assertIn("provision --prefijo demo --eliminar server1 server2 server3 server4\n", texto)
         self.assertRegex(texto, r"IMPORTANTE: no borres /\S*/imagenesMV/mibase\.qcow2\.\n")
+
+
+class TestPermisosDeLaImagenBase(unittest.TestCase):
+    """La imagen cloud que se descarga (o se copia del directorio compartido)
+    queda en 0644 aunque la umask sea 002: con la máquina encendida, libvirt le
+    pone el grupo kvm, el de todos los alumnos."""
+
+    def preparar(self, compartida):
+        s = Silo("server1")
+        self.addCleanup(s.tmp.cleanup)
+        o = s.o
+        o.base_img = s.ruta(su.IMAGEN_NOBLE)
+        o.base_img_url = "https://ejemplo/" + su.IMAGEN_NOBLE
+        o.dir_compartido = os.path.join(s.tmp.name, "compartido")
+        os.makedirs(o.dir_compartido)
+        if compartida:
+            ruta = os.path.join(o.dir_compartido, su.IMAGEN_NOBLE)
+            with open(ruta, "w") as f:
+                f.write("imagen\n")
+            os.chmod(ruta, 0o664)   # cp conserva el modo del original
+        return o
+
+    def bajar(self, o):
+        def descargar(o, url, fichero, silencioso=False):
+            with open(fichero, "w") as f:   # con la umask del proceso, como wget
+                f.write("imagen\n")
+            return 0
+        anterior = os.umask(0o002)
+        try:
+            with mock.patch.object(su, "descargar", descargar), \
+                    mock.patch.object(su, "verificar_suma"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                su.descargar_imagen_base(o)
+        finally:
+            os.umask(anterior)
+        return su.stat.S_IMODE(os.stat(o.base_img).st_mode)
+
+    def test_descargada_con_umask_002(self):
+        self.assertEqual(self.bajar(self.preparar(compartida=False)), 0o644)
+
+    def test_copiada_del_directorio_compartido_con_umask_002(self):
+        self.assertEqual(self.bajar(self.preparar(compartida=True)), 0o644)

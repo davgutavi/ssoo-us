@@ -744,6 +744,10 @@ def descargar_imagen_base(o):
                    % (codigo, o.base_img_url, o.base_img))
         verificar_suma(o, tmp)
 
+    # 0644, sea cual sea la umask: con la máquina encendida, libvirt le pone el
+    # grupo kvm (el de todos los alumnos) y, con la umask 002 (0664), cualquiera
+    # podría escribir en la imagen de la que dependen todas sus máquinas
+    os.chmod(tmp, 0o644)
     os.replace(tmp, o.base_img)
     quitar_disco_creado(o, tmp)
     print("✔ Imagen base lista: %s" % o.base_img)
