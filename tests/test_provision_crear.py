@@ -143,3 +143,21 @@ class TestPermisosDeLaImagenBase(unittest.TestCase):
 
     def test_copiada_del_directorio_compartido_con_umask_002(self):
         self.assertEqual(self.bajar(self.preparar(compartida=True)), 0o644)
+
+
+class TestPermisosDeLaCopiaDeUbuntuBase(unittest.TestCase):
+    """El disco que se copia de ubuntu-base (664 en los servidores: cp conserva
+    el modo) queda en 0644, como los que crea qemu-img."""
+
+    def test_copia_en_0644(self):
+        s = Silo("server1")
+        self.addCleanup(s.tmp.cleanup)
+        origen = os.path.join(s.tmp.name, "ubuntu-base.qcow2")
+        su.ejecutar(["qemu-img", "create", "-q", "-f", "qcow2", origen, "1G"])
+        os.chmod(origen, 0o664)
+        anterior = os.umask(0o002)
+        try:
+            su.crear_disco_copia(s.o, s.ruta("server1.qcow2"), origen, "1G")
+        finally:
+            os.umask(anterior)
+        self.assertEqual(su.stat.S_IMODE(os.stat(s.ruta("server1.qcow2")).st_mode), 0o644)

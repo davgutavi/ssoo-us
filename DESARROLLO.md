@@ -350,7 +350,11 @@ Y otro de la 1.3.0 (David, 26-nov), por el mismo motivo que la clave:
   con grupo propio, 0664, y con la máquina encendida libvirt le pone el grupo
   `kvm`, el de todos los alumnos, que podían escribir en la imagen de la que
   dependen sus máquinas (`diagnosis` ya lo avisaba). `descargar_imagen_base`
-  la deja en 0644, tanto descargada como copiada del directorio compartido.
+  la deja en 0644, tanto descargada como copiada del directorio compartido. Lo
+  mismo con el disco copiado de `ubuntu-base` (`crear_disco_copia`): `cp`
+  conserva el modo del original, que en los servidores es 664. Los discos que
+  crea `qemu-img` (copias COW, discos extra) no lo necesitan: `qemu-img` los
+  crea siempre con 0644, sea cual sea la umask.
 
 ### Pruebas de equivalencia con `ci-diagnosis`
 

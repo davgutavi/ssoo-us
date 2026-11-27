@@ -441,7 +441,10 @@ def crear_disco_copia(o, ruta, origen, tam):
     codigo = ejecutar_visible(["cp", origen, ruta])
     if codigo != 0:
         raise FalloInesperado(codigo)
-    os.chmod(ruta, os.stat(ruta).st_mode | stat.S_IWUSR)
+    # cp conserva el modo del original (ubuntu-base es 664): el disco, en 0644
+    # como los que crea qemu-img, que no puede escribir el grupo kvm cuando
+    # libvirt se lo asigna con la máquina encendida
+    os.chmod(ruta, 0o644)
     vs = tam_virtual(ruta)
     if re.fullmatch(r"[0-9]+", vs) and tam_a_bytes(tam) > int(vs):
         qemu_img_crear(["resize", "-q", ruta, tam])
